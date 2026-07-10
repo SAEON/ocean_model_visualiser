@@ -7,8 +7,7 @@ import maplibregl from 'maplibre-gl';
 import { Play, Pause, SkipForward, SkipBack, Settings, Compass, Waves, Layers, Thermometer, Droplets, ArrowRight, ArrowLeft, Loader2, Activity, MapPin } from 'lucide-react';
 import Admin from './Admin';
 
-// API Base URL
-const API_URL = import.meta.env.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}:8001`;
+import { API_URL } from './config';
 
 const ESRI_MAP_STYLE = {
   "version": 8,

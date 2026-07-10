@@ -19,7 +19,7 @@ services:
       - MONGODB_URL=mongodb://mongodb:27017
     volumes:
     # Location on server : Location in container (Leave this as /data/)
-      - .:/data/
+      - /mnt/ocims-somisana/public-facing/:/data/
     depends_on:
       - mongodb
 
