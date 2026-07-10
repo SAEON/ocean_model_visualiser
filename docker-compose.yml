@@ -1,6 +1,6 @@
 services:
   mongodb:
-    image: mongo:6.0
+    image: mongo:4.4.26
     container_name: ocean-mongodb
     restart: always
     ports:

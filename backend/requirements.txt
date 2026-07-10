@@ -4,6 +4,6 @@ xarray
 netCDF4
 matplotlib
 shapely
-numpy
+numpy<2.4.0
 motor
 
