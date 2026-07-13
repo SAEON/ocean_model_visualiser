@@ -46,11 +46,34 @@ async def get_cached_dataset(file_path: str):
                 pass
             del dataset_cache[file_path]
 
-    if not os.path.exists(file_path):
+    resolved_path = file_path
+    if not os.path.exists(resolved_path):
+        if resolved_path.startswith("/data/"):
+            fallback = os.path.join(os.getcwd(), os.path.basename(resolved_path))
+            if os.path.exists(fallback):
+                resolved_path = fallback
+
+    if not os.path.exists(resolved_path):
         raise HTTPException(status_code=400, detail=f"NetCDF file not found at path: {file_path}")
     try:
-        dataset = xr.open_dataset(file_path)
-        times = [str(t) for t in dataset['time'].values]
+        dataset = xr.open_dataset(resolved_path)
+        
+        # Look up allowed variables and time sampling for this file path from the database
+        allowed_vars = None
+        time_sampling = 1
+        try:
+            member = await members_collection.find_one({"variable_groups.file_path": file_path})
+            if member:
+                for vg in member.get("variable_groups", []):
+                    if vg.get("file_path") == file_path:
+                        allowed_vars = vg.get("variables", [])
+                        time_sampling = vg.get("time_sampling", 1)
+                        break
+        except Exception as e:
+            print(f"Error querying database for file_path {file_path}: {e}")
+
+        raw_times = [str(t) for t in dataset['time'].values]
+        times = raw_times[::time_sampling]
         depths = [float(d) for d in dataset['depth'].values] if 'depth' in dataset else []
         
         # Spatial bounds
@@ -58,18 +81,6 @@ async def get_cached_dataset(file_path: str):
         lon_max = float(dataset['lon_rho'].max().values)
         lat_min = float(dataset['lat_rho'].min().values)
         lat_max = float(dataset['lat_rho'].max().values)
-        
-        # Look up allowed variables for this file path from the database
-        allowed_vars = None
-        try:
-            member = await members_collection.find_one({"variable_groups.file_path": file_path})
-            if member:
-                for vg in member.get("variable_groups", []):
-                    if vg.get("file_path") == file_path:
-                        allowed_vars = vg.get("variables", [])
-                        break
-        except Exception as e:
-            print(f"Error querying database for file_path {file_path}: {e}")
 
         # Map frontend variable selections to NetCDF variables
         allowed_netcdf_vars = []
@@ -111,7 +122,8 @@ async def get_cached_dataset(file_path: str):
                 "lat_min": lat_min,
                 "lat_max": lat_max
             },
-            "ranges": var_ranges
+            "ranges": var_ranges,
+            "time_sampling": time_sampling
         }
         dataset_cache[file_path] = (dataset, meta, now)
         return dataset, meta
@@ -236,11 +248,15 @@ async def get_contours(
         if depth < 0 or depth >= len(meta['depths']):
             raise HTTPException(status_code=400, detail=f"Depth index must be between 0 and {len(meta['depths'])-1}")
 
+    # Map frontend time index to raw time index using cached time_sampling
+    time_sampling = meta.get("time_sampling", 1)
+    actual_time = time * time_sampling
+
     # Extract slice
     if variable == 'zeta':
-        slice_data = dataset['zeta'].isel(time=time)
+        slice_data = dataset['zeta'].isel(time=actual_time)
     else:
-        slice_data = dataset[variable].isel(time=time, depth=depth)
+        slice_data = dataset[variable].isel(time=actual_time, depth=depth)
         
     z = slice_data.values
     lon = dataset['lon_rho'].values
@@ -368,9 +384,13 @@ async def get_currents(
     if depth < 0 or depth >= len(meta['depths']):
         raise HTTPException(status_code=400, detail=f"Depth index must be between 0 and {len(meta['depths'])-1}")
 
+    # Map frontend time index to raw time index using cached time_sampling
+    time_sampling = meta.get("time_sampling", 1)
+    actual_time = time * time_sampling
+
     # Extract u and v components
-    u_slice = dataset['u'].isel(time=time, depth=depth).values
-    v_slice = dataset['v'].isel(time=time, depth=depth).values
+    u_slice = dataset['u'].isel(time=actual_time, depth=depth).values
+    v_slice = dataset['v'].isel(time=actual_time, depth=depth).values
     lon = dataset['lon_rho'].values
     lat = dataset['lat_rho'].values
     
@@ -400,6 +420,175 @@ async def get_currents(
             })
             
     return points
+
+
+@app.get("/api/points")
+async def get_points(
+    downsample: int = Query(3, description="Skip interval for downsampling grid"),
+    file_path: Optional[str] = Query(None, description="Path to specific NetCDF file")
+):
+    if file_path:
+        dataset, meta = await get_cached_dataset(file_path)
+    else:
+        dataset = ds
+        meta = metadata_cache
+        
+    if dataset is None:
+        raise HTTPException(status_code=503, detail="Dataset not loaded")
+
+    # Locate coordinates variables
+    lon_var = None
+    lat_var = None
+    for name in ['lon_rho', 'nav_lon', 'lon']:
+        if name in dataset:
+            lon_var = name
+            break
+    for name in ['lat_rho', 'nav_lat', 'lat']:
+        if name in dataset:
+            lat_var = name
+            break
+            
+    if not lon_var or not lat_var:
+        raise HTTPException(status_code=400, detail="Could not find coordinate variables in NetCDF file.")
+        
+    lon = dataset[lon_var].values
+    lat = dataset[lat_var].values
+    
+    # If coordinates are 1D, meshgrid them
+    if len(lon.shape) == 1 and len(lat.shape) == 1:
+        lon, lat = np.meshgrid(lon, lat)
+        
+    if len(lon.shape) != 2 or len(lat.shape) != 2:
+        raise HTTPException(status_code=400, detail="Coordinate dimensions must be 2D.")
+
+    m, n = lon.shape
+    
+    # Look up land mask if present
+    mask = None
+    for mask_name in ['mask', 'mask_rho']:
+        if mask_name in dataset:
+            mask = dataset[mask_name].values
+            break
+
+    points = []
+    for r in range(0, m, downsample):
+        for c in range(0, n, downsample):
+            lon_val = float(lon[r, c])
+            lat_val = float(lat[r, c])
+            
+            # Skip NaNs
+            if np.isnan(lon_val) or np.isnan(lat_val):
+                continue
+                
+            # Skip land
+            if mask is not None and float(mask[r, c]) == 0.0:
+                continue
+                
+            points.append({
+                "lng": lon_val,
+                "lat": lat_val,
+                "i": r,
+                "j": c
+            })
+            
+    return points
+
+
+@app.get("/api/timeseries")
+async def get_timeseries(
+    variable: str = Query(..., description="Variable: temp, salt, zeta"),
+    depth: int = Query(0, description="Depth index (0-6)"),
+    i: int = Query(..., description="Grid row index (r)"),
+    j: int = Query(..., description="Grid column index (c)"),
+    file_path: Optional[str] = Query(None, description="Path to specific NetCDF file")
+):
+    if file_path:
+        dataset, meta = await get_cached_dataset(file_path)
+    else:
+        dataset = ds
+        meta = metadata_cache
+        
+    if dataset is None:
+        raise HTTPException(status_code=503, detail="Dataset not loaded")
+
+    if variable not in ['temp', 'salt', 'zeta']:
+        raise HTTPException(status_code=400, detail="Invalid variable. Choose temp, salt, or zeta.")
+
+    # Locate variable in dataset
+    if variable not in dataset:
+        raise HTTPException(status_code=400, detail=f"Variable '{variable}' not found in dataset.")
+
+    # Locate coordinates variables
+    lon_var = None
+    lat_var = None
+    for name in ['lon_rho', 'nav_lon', 'lon']:
+        if name in dataset:
+            lon_var = name
+            break
+    for name in ['lat_rho', 'nav_lat', 'lat']:
+        if name in dataset:
+            lat_var = name
+            break
+            
+    if not lon_var or not lat_var:
+        raise HTTPException(status_code=400, detail="Could not find coordinate variables in NetCDF file.")
+        
+    lon = dataset[lon_var].values
+    lat = dataset[lat_var].values
+    
+    # If coordinates are 1D, meshgrid them
+    if len(lon.shape) == 1 and len(lat.shape) == 1:
+        lon, lat = np.meshgrid(lon, lat)
+
+    # Range checks for index i and j
+    m, n = lon.shape
+    if i < 0 or i >= m or j < 0 or j >= n:
+        raise HTTPException(status_code=400, detail=f"Grid indices out of bounds. i must be 0-{m-1}, j must be 0-{n-1}")
+
+    # Build the dictionary of index selections for xarray
+    dims = dataset[variable].dims
+    
+    # Last two dimensions are spatial (usually eta_rho, xi_rho or Y, X)
+    spatial_y_dim = dims[-2]
+    spatial_x_dim = dims[-1]
+    
+    indexer = {spatial_y_dim: i, spatial_x_dim: j}
+    
+    # If 'depth' is a dimension, and variable is not zeta, include depth
+    if 'depth' in dims and variable != 'zeta':
+        if depth < 0 or depth >= len(meta['depths']):
+            raise HTTPException(status_code=400, detail=f"Depth index must be between 0 and {len(meta['depths'])-1}")
+        indexer['depth'] = depth
+        
+    try:
+        ts_slice = dataset[variable].isel(**indexer)
+        raw_vals = ts_slice.values
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to query timeseries from dataset. Error: {str(e)}")
+
+    # Time sampling slice
+    time_sampling = meta.get("time_sampling", 1)
+    vals = raw_vals[::time_sampling]
+    times = meta.get("times", [])
+    
+    # Sanitize NaNs
+    vals_clean = [float(v) if not np.isnan(v) else None for v in vals]
+    
+    # Unit mapping
+    unit = '°C'
+    if variable == 'salt':
+        unit = 'g/kg'
+    elif variable == 'zeta':
+        unit = 'm'
+        
+    return {
+        "times": times,
+        "values": vals_clean,
+        "variable": variable,
+        "unit": unit,
+        "lat": float(lat[i, j]),
+        "lng": float(lon[i, j])
+    }
 
 
 # --- PRODUCTS & MEMBERS API ENDPOINTS ---
@@ -454,7 +643,14 @@ async def create_member(product_id: str, member: MemberCreate):
     
     for group in member.variable_groups:
         # Check if file exists
-        if not os.path.exists(group.file_path):
+        resolved_path = group.file_path
+        if not os.path.exists(resolved_path):
+            if resolved_path.startswith("/data/"):
+                fallback = os.path.join(os.getcwd(), os.path.basename(resolved_path))
+                if os.path.exists(fallback):
+                    resolved_path = fallback
+
+        if not os.path.exists(resolved_path):
             raise HTTPException(
                 status_code=400,
                 detail=f"NetCDF file not found at path: {group.file_path}"
@@ -465,14 +661,16 @@ async def create_member(product_id: str, member: MemberCreate):
         
         # Parse using xarray to extract dimensions
         try:
-            with xr.open_dataset(group.file_path) as test_ds:
+            with xr.open_dataset(resolved_path) as test_ds:
                 # Extract depth dimension if it exists
                 if 'depth' in test_ds:
                     group_depths = [float(d) for d in test_ds['depth'].values]
                     
                 # Extract time dimension if it exists
                 if 'time' in test_ds:
-                    group_time_steps = [str(t) for t in test_ds['time'].values]
+                    raw_times = [str(t) for t in test_ds['time'].values]
+                    step = group.time_sampling if group.time_sampling and group.time_sampling > 0 else 1
+                    group_time_steps = raw_times[::step]
         except Exception as e:
             raise HTTPException(
                 status_code=400,
@@ -487,7 +685,8 @@ async def create_member(product_id: str, member: MemberCreate):
             "variables": group.variables,
             "file_path": group.file_path,
             "depths": group_depths,
-            "time_steps": group_time_steps
+            "time_steps": group_time_steps,
+            "time_sampling": group.time_sampling or 1
         })
             
     try:
@@ -724,7 +923,14 @@ async def update_member(member_id: str, member_update: MemberUpdate):
     processed_groups = []
     for group in member_update.variable_groups:
         # Check if file exists
-        if not os.path.exists(group.file_path):
+        resolved_path = group.file_path
+        if not os.path.exists(resolved_path):
+            if resolved_path.startswith("/data/"):
+                fallback = os.path.join(os.getcwd(), os.path.basename(resolved_path))
+                if os.path.exists(fallback):
+                    resolved_path = fallback
+
+        if not os.path.exists(resolved_path):
             raise HTTPException(
                 status_code=400,
                 detail=f"NetCDF file not found at path: {group.file_path}"
@@ -735,14 +941,16 @@ async def update_member(member_id: str, member_update: MemberUpdate):
         
         # Parse using xarray to extract dimensions
         try:
-            with xr.open_dataset(group.file_path) as test_ds:
+            with xr.open_dataset(resolved_path) as test_ds:
                 # Extract depth dimension if it exists
                 if 'depth' in test_ds:
                     group_depths = [float(d) for d in test_ds['depth'].values]
                     
                 # Extract time dimension if it exists
                 if 'time' in test_ds:
-                    group_time_steps = [str(t) for t in test_ds['time'].values]
+                    raw_times = [str(t) for t in test_ds['time'].values]
+                    step = group.time_sampling if group.time_sampling and group.time_sampling > 0 else 1
+                    group_time_steps = raw_times[::step]
         except Exception as e:
             raise HTTPException(
                 status_code=400,
@@ -757,7 +965,8 @@ async def update_member(member_id: str, member_update: MemberUpdate):
             "variables": group.variables,
             "file_path": group.file_path,
             "depths": group_depths,
-            "time_steps": group_time_steps
+            "time_steps": group_time_steps,
+            "time_sampling": group.time_sampling or 1
         })
         
     try:

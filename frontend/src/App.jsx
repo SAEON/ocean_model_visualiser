@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import DeckGL from '@deck.gl/react';
-import { GeoJsonLayer, PathLayer } from '@deck.gl/layers';
+import { GeoJsonLayer, PathLayer, ScatterplotLayer } from '@deck.gl/layers';
 import { MaskExtension } from '@deck.gl/extensions';
 import Map from 'react-map-gl/maplibre';
 import maplibregl from 'maplibre-gl';
-import { Play, Pause, SkipForward, SkipBack, Settings, Compass, Waves, Layers, Thermometer, Droplets, ArrowRight, ArrowLeft, Loader2, Activity, MapPin } from 'lucide-react';
+import { Play, Pause, SkipForward, SkipBack, Settings, Compass, Waves, Layers, Thermometer, Droplets, ArrowRight, ArrowLeft, Loader2, Activity, MapPin, X } from 'lucide-react';
 import Admin from './Admin';
 
 import { API_URL } from './config';
@@ -115,6 +115,15 @@ function Visualizer({ onNavigateAdmin }) {
   const [simplification, setSimplification] = useState(0.001);
   const [showSettings, setShowSettings] = useState(false);
 
+  // Grid Points & Time Series States
+  const [showPoints, setShowPoints] = useState(false);
+  const [pointsData, setPointsData] = useState([]);
+  const [loadingPoints, setLoadingPoints] = useState(false);
+  const [clickedPoint, setClickedPoint] = useState(null); // { lat, lng, i, j }
+  const [timeSeriesData, setTimeSeriesData] = useState(null); // { times, values, variable, unit, lat, lng }
+  const [timeSeriesVariable, setTimeSeriesVariable] = useState('temp');
+  const [loadingTimeSeries, setLoadingTimeSeries] = useState(false);
+
   // Cache System
   const [cache, setCache] = useState({});
   const [maskData, setMaskData] = useState(null);
@@ -123,8 +132,32 @@ function Visualizer({ onNavigateAdmin }) {
   useEffect(() => {
     import('./sa_province_outline.json')
       .then((mod) => {
-        setMaskData(mod.default);
-        console.log('SA province outline mask loaded successfully');
+        // Expand mask layer bounds to cover all model boundary regions (e.g. down to -42 latitude and 10 longitude)
+        // so that deck.gl doesn't clip layers outside the land mask's natural bounding box.
+        const expandedMask = {
+          ...mod.default,
+          features: [
+            ...mod.default.features,
+            {
+              type: 'Feature',
+              properties: { dummy: true },
+              geometry: {
+                type: 'Point',
+                coordinates: [10, -42]
+              }
+            },
+            {
+              type: 'Feature',
+              properties: { dummy: true },
+              geometry: {
+                type: 'Point',
+                coordinates: [35, -20]
+              }
+            }
+          ]
+        };
+        setMaskData(expandedMask);
+        console.log('SA province outline mask loaded successfully with expanded bounds');
       })
       .catch((err) => {
         console.error('Failed to load SA province outline mask:', err);
@@ -156,6 +189,56 @@ function Visualizer({ onNavigateAdmin }) {
         console.error('Failed to load products.', err);
       });
   }, []);
+
+  // Fetch grid points when group or downsampling changes
+  useEffect(() => {
+    if (!selectedGroup) {
+      setPointsData([]);
+      return;
+    }
+    const filePath = selectedGroup.file_path;
+    setLoadingPoints(true);
+    fetch(`${API_URL}/api/points?file_path=${encodeURIComponent(filePath)}&downsample=${downsampleRate}`)
+      .then((res) => {
+        if (!res.ok) throw new Error('API server returned error');
+        return res.json();
+      })
+      .then((data) => {
+        setPointsData(data || []);
+      })
+      .catch((err) => {
+        console.error('Error fetching grid points:', err);
+      })
+      .finally(() => {
+        setLoadingPoints(false);
+      });
+  }, [selectedGroup, downsampleRate]);
+
+  // Fetch time series data when clickedPoint, variable, or depth changes
+  useEffect(() => {
+    if (!clickedPoint || !selectedGroup) {
+      setTimeSeriesData(null);
+      return;
+    }
+    const filePath = selectedGroup.file_path;
+    const dIdx = timeSeriesVariable === 'zeta' ? 0 : currentDepthIndex;
+    
+    setLoadingTimeSeries(true);
+    fetch(`${API_URL}/api/timeseries?file_path=${encodeURIComponent(filePath)}&variable=${timeSeriesVariable}&depth=${dIdx}&i=${clickedPoint.i}&j=${clickedPoint.j}`)
+      .then((res) => {
+        if (!res.ok) throw new Error('API server returned error');
+        return res.json();
+      })
+      .then((data) => {
+        setTimeSeriesData(data);
+      })
+      .catch((err) => {
+        console.error('Error fetching time series:', err);
+      })
+      .finally(() => {
+        setLoadingTimeSeries(false);
+      });
+  }, [clickedPoint, timeSeriesVariable, currentDepthIndex, selectedGroup]);
 
   const handleProductClick = async (prodId, prodName) => {
     setLoadingMembers(true);
@@ -304,10 +387,10 @@ function Visualizer({ onNavigateAdmin }) {
       ensureData((currentTimeIndex + 1) % numSteps);
     }
 
-    // 2. Debounce prefetching of remaining buffer steps (+2 to +12)
+    // 2. Debounce prefetching of remaining buffer steps (+2 to +20)
     // to prevent browser network socket choking during rapid scrubbing/playback
     const prefetchTimer = setTimeout(() => {
-      for (let i = 2; i <= 12; i++) {
+      for (let i = 2; i <= 20; i++) {
         const nextIndex = (currentTimeIndex + i) % numSteps;
         ensureData(nextIndex);
       }
@@ -321,13 +404,27 @@ function Visualizer({ onNavigateAdmin }) {
     let timer = null;
     if (isPlaying && metadata) {
       timer = setInterval(() => {
-        setCurrentTimeIndex((prev) => (prev + 1) % metadata.times.length);
+        const dIdx = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
+        const filePath = selectedGroup?.file_path || '';
+        
+        setCurrentTimeIndex((prev) => {
+          const currentKey = `${filePath}_${selectedVariable}_${dIdx}_${prev}_ds${downsampleRate}_tol${simplification}`;
+          const isCurrentLoaded = !!cacheRef.current[currentKey];
+          
+          if (!isCurrentLoaded) {
+            // The current frame hasn't loaded yet. Stay here and wait.
+            return prev;
+          }
+          
+          // Advance to the next frame
+          return (prev + 1) % metadata.times.length;
+        });
       }, 1000 / playbackSpeed);
     }
     return () => {
       if (timer) clearInterval(timer);
     };
-  }, [isPlaying, playbackSpeed, metadata]);
+  }, [isPlaying, playbackSpeed, metadata, selectedVariable, currentDepthIndex, downsampleRate, simplification, selectedGroup]);
 
   // Active Key
   const activeKey = useMemo(() => {
@@ -460,6 +557,46 @@ function Visualizer({ onNavigateAdmin }) {
       );
     }
 
+    // 2.5. Grid Points Layer
+    if (selectedMember && showPoints && pointsData.length > 0) {
+      layersList.push(
+        new ScatterplotLayer({
+          id: 'grid-points-layer',
+          data: pointsData,
+          pickable: true,
+          opacity: 0.8,
+          stroked: false,
+          filled: true,
+          radiusScale: 1,
+          radiusMinPixels: 2.5,
+          radiusMaxPixels: 6,
+          lineWidthMinPixels: 1,
+          getPosition: (d) => [d.lng, d.lat],
+          getRadius: (d) => 3,
+          getFillColor: [255, 255, 255, 220],
+          extensions: maskData ? [new MaskExtension()] : [],
+          maskId: 'land-mask',
+          maskInverted: true,
+          onClick: (info) => {
+            if (info.object) {
+              const available = selectedGroup?.variables || [];
+              const standardVars = ['temp', 'salt', 'zeta'];
+              const activeStandard = standardVars.includes(selectedVariable) ? selectedVariable : null;
+              const defaultVar = activeStandard || available.find(v => standardVars.includes(v)) || 'temp';
+              
+              setClickedPoint({
+                lat: info.object.lat,
+                lng: info.object.lng,
+                i: info.object.i,
+                j: info.object.j
+              });
+              setTimeSeriesVariable(defaultVar);
+            }
+          }
+        })
+      );
+    }
+
     // 3. Product Bounding Boxes
     if (!selectedMember) {
       const productRegions = products
@@ -475,7 +612,7 @@ function Visualizer({ onNavigateAdmin }) {
 
       layersList.push(
         new GeoJsonLayer({
-          id: 'products-boundary-layer',
+          id: maskData ? 'products-boundary-layer-masked' : 'products-boundary-layer-unmasked',
           data: {
             type: 'FeatureCollection',
             features: productRegions
@@ -503,7 +640,7 @@ function Visualizer({ onNavigateAdmin }) {
     }
 
     return layersList;
-  }, [renderedData, showContours, showCurrents, valMin, valMax, stops, vectorScale, maxSpeed, selectedMember, products, maskData]);
+  }, [renderedData, showContours, showCurrents, showPoints, pointsData, selectedGroup, selectedVariable, valMin, valMax, stops, vectorScale, maxSpeed, selectedMember, products, maskData]);
 
   // Handle Tooltips
   const getTooltip = ({ object }) => {
@@ -603,13 +740,14 @@ function Visualizer({ onNavigateAdmin }) {
 
       {/* 2. Top Header Title (Full-Width Header) */}
       <header className="absolute top-0 left-0 right-0 h-16 bg-slate-950/90 border-b border-slate-800/80 backdrop-blur-md shadow-lg z-20 flex items-center justify-between px-6 pointer-events-auto">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-gradient-to-tr from-sky-500 to-indigo-600 rounded-xl text-white shadow-lg shadow-sky-500/20">
-            <Waves className="w-5 h-5" />
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 bg-slate-900/40 px-3 py-1 rounded-xl border border-slate-850">
+            <img src="/saeon-logo.png" alt="SAEON Logo" className="h-7 w-auto object-contain" />
+            <img src="/somisana-logo.png" alt="SOMISANA Logo" className="h-7 w-auto object-contain" />
           </div>
           <div>
             <h1 className="font-bold text-base text-slate-100 tracking-tight font-outfit">
-              Ocean Model Visualiser
+              SOMISANA Ocean Models
             </h1>
             <p className="text-[10px] text-slate-400">
               {selectedMember 
@@ -620,12 +758,14 @@ function Visualizer({ onNavigateAdmin }) {
             </p>
           </div>
         </div>
-        <button
-          onClick={onNavigateAdmin}
-          className="px-3 py-1.5 bg-slate-900 hover:bg-slate-850 text-xs font-bold uppercase tracking-wider rounded-lg text-slate-400 hover:text-slate-100 transition-colors border border-slate-800 hover:border-slate-700"
-        >
-          Admin Portal
-        </button>
+        <div className="flex items-center gap-4">
+          <button
+            onClick={onNavigateAdmin}
+            className="px-3 py-1.5 bg-slate-900 hover:bg-slate-850 text-xs font-bold uppercase tracking-wider rounded-lg text-slate-400 hover:text-slate-100 transition-colors border border-slate-800 hover:border-slate-700"
+          >
+            Admin Portal
+          </button>
+        </div>
       </header>      {/* 4. Color Scale Legends (Bottom Left) - Now vertical */}
       {selectedMember && metadata && showContours && (
         <section className="absolute bottom-[54px] left-6 w-20 h-72 bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-4 rounded-2xl shadow-2xl z-10 flex flex-col items-center justify-between pointer-events-auto">
@@ -896,35 +1036,46 @@ function Visualizer({ onNavigateAdmin }) {
         {selectedMember && metadata && (
           <section className="w-full bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-4 rounded-2xl shadow-2xl space-y-4 shrink-0">
             {/* Visibility Controls */}
-            {(hasContoursOption || hasCurrents) && (
-              <div className="space-y-2">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Map Layers</span>
-                <div className={`grid ${hasContoursOption && hasCurrents ? 'grid-cols-2' : 'grid-cols-1'} gap-2`}>
-                  {hasContoursOption && (
-                    <label className="flex items-center justify-center gap-2 cursor-pointer text-xs font-semibold py-2 rounded-xl bg-slate-900/60 border border-slate-850 hover:border-slate-750 transition-colors text-slate-300">
-                      <input
-                        type="checkbox"
-                        checked={showContours}
-                        onChange={(e) => setShowContours(e.target.checked)}
-                        className="rounded border-slate-800 bg-slate-900 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-950 w-3.5 h-3.5"
-                      />
-                      Contours
-                    </label>
-                  )}
-                  {hasCurrents && (
-                    <label className="flex items-center justify-center gap-2 cursor-pointer text-xs font-semibold py-2 rounded-xl bg-slate-900/60 border border-slate-850 hover:border-slate-750 transition-colors text-slate-300">
-                      <input
-                        type="checkbox"
-                        checked={showCurrents}
-                        onChange={(e) => setShowCurrents(e.target.checked)}
-                        className="rounded border-slate-800 bg-slate-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-slate-950 w-3.5 h-3.5"
-                      />
-                      Currents
-                    </label>
-                  )}
-                </div>
+            <div className="space-y-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Map Layers</span>
+              <div className={`grid ${
+                (hasContoursOption ? 1 : 0) + (hasCurrents ? 1 : 0) + 1 >= 3
+                  ? 'grid-cols-3'
+                  : 'grid-cols-2'
+              } gap-2`}>
+                {hasContoursOption && (
+                  <label className="flex items-center justify-center gap-2 cursor-pointer text-xs font-semibold py-2 rounded-xl bg-slate-900/60 border border-slate-850 hover:border-slate-750 transition-colors text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={showContours}
+                      onChange={(e) => setShowContours(e.target.checked)}
+                      className="rounded border-slate-800 bg-slate-900 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-950 w-3.5 h-3.5"
+                    />
+                    Contours
+                  </label>
+                )}
+                {hasCurrents && (
+                  <label className="flex items-center justify-center gap-2 cursor-pointer text-xs font-semibold py-2 rounded-xl bg-slate-900/60 border border-slate-850 hover:border-slate-750 transition-colors text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={showCurrents}
+                      onChange={(e) => setShowCurrents(e.target.checked)}
+                      className="rounded border-slate-800 bg-slate-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-slate-950 w-3.5 h-3.5"
+                    />
+                    Currents
+                  </label>
+                )}
+                <label className="flex items-center justify-center gap-2 cursor-pointer text-xs font-semibold py-2 rounded-xl bg-slate-900/60 border border-slate-850 hover:border-slate-750 transition-colors text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={showPoints}
+                    onChange={(e) => setShowPoints(e.target.checked)}
+                    className="rounded border-slate-800 bg-slate-900 text-slate-200 focus:ring-white focus:ring-offset-slate-950 w-3.5 h-3.5"
+                  />
+                  Grid Points
+                </label>
               </div>
-            )}
+            </div>
 
             {/* Toggle Settings Button */}
             <div className="border-t border-slate-900 pt-3">
@@ -949,7 +1100,7 @@ function Visualizer({ onNavigateAdmin }) {
                   <input
                     type="range"
                     min="0.005"
-                    max="0.08"
+                    max="0.5"
                     step="0.005"
                     value={vectorScale}
                     onChange={(e) => setVectorScale(parseFloat(e.target.value))}
@@ -965,7 +1116,7 @@ function Visualizer({ onNavigateAdmin }) {
                   <input
                     type="range"
                     min="2"
-                    max="5"
+                    max="10"
                     step="1"
                     value={downsampleRate}
                     onChange={(e) => setDownsampleRate(parseInt(e.target.value))}
@@ -1020,9 +1171,9 @@ function Visualizer({ onNavigateAdmin }) {
                       ? 'opacity-40 cursor-not-allowed border-slate-800/20'
                       : 'hover:text-slate-200 hover:border-slate-700'
                   }`}
-                  title={d === 0 ? 'Surface' : `${Math.abs(d)}m`}
+                  title={d === 0 ? 'Surface (0m)' : `${Math.abs(d)}m`}
                 >
-                  {d === 0 ? 'Surf' : `${Math.abs(d)}m`}
+                  {d === 0 ? '0m' : `${Math.abs(d)}m`}
                 </button>
               );
             })}
@@ -1112,9 +1263,334 @@ function Visualizer({ onNavigateAdmin }) {
       )}
 
       {/* 5. Compass Rose / North arrow (Top Right) */}
-      <div className="absolute top-4 right-4 p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800/80 backdrop-blur-md shadow-xl z-10 flex items-center justify-center pointer-events-auto">
+      <div className="absolute top-20 right-4 p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800/80 backdrop-blur-md shadow-xl z-10 flex items-center justify-center pointer-events-auto">
         <Compass className="w-5 h-5 text-slate-400 animate-[spin_60s_linear_infinite]" />
       </div>
+
+      {/* 6. Time Series Modal */}
+      {clickedPoint && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-[fadeIn_0.15s_ease-out]">
+          <div 
+            className="w-full max-w-[640px] bg-slate-900/95 border border-slate-800/80 backdrop-blur-xl rounded-3xl p-6 shadow-2xl space-y-4 text-slate-100 relative pointer-events-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex justify-between items-start">
+              <div>
+                <h3 className="text-sm font-bold text-slate-200 flex items-center gap-1.5">
+                  <Activity className="w-4 h-4 text-sky-400 animate-pulse" /> Time Series Analysis
+                </h3>
+                <p className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
+                  <MapPin className="w-3 h-3 text-emerald-400" /> 
+                  Lat: <span className="font-mono text-slate-300">{clickedPoint.lat.toFixed(4)}</span>, 
+                  Lng: <span className="font-mono text-slate-300">{clickedPoint.lng.toFixed(4)}</span>
+                </p>
+              </div>
+              <button 
+                onClick={() => setClickedPoint(null)}
+                className="p-1.5 bg-slate-800/50 hover:bg-slate-800 border border-slate-700/50 hover:border-slate-600 text-slate-400 hover:text-slate-200 rounded-xl transition-all"
+                title="Close Panel"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Variable Select / Depth indicator */}
+            <div className="flex items-center justify-between gap-4 border-b border-slate-850 pb-3">
+              {/* Select tabs */}
+              <div className="flex gap-1.5 p-0.5 bg-slate-950/60 rounded-xl border border-slate-850/50">
+                {(selectedGroup?.variables || [])
+                  .filter(v => ['temp', 'salt', 'zeta'].includes(v))
+                  .map(v => {
+                    const label = v === 'temp' ? 'Temp' : v === 'salt' ? 'Salinity' : 'SSH';
+                    const activeColor = v === 'temp' ? 'text-sky-400' : v === 'salt' ? 'text-emerald-400' : 'text-amber-400';
+                    return (
+                      <button
+                        key={v}
+                        onClick={() => setTimeSeriesVariable(v)}
+                        className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all ${
+                          timeSeriesVariable === v
+                            ? `bg-slate-900 ${activeColor} border border-slate-800`
+                            : 'text-slate-500 hover:text-slate-300 border border-transparent'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+              </div>
+              
+              {/* Depth indicator if not zeta */}
+              {timeSeriesVariable !== 'zeta' && metadata && (
+                <div className="text-[10px] text-slate-400 bg-slate-900/60 border border-slate-850/40 px-3 py-1.5 rounded-xl">
+                  Depth: <span className="font-bold text-sky-400">
+                    {metadata.depths[currentDepthIndex] === 0 ? '0m' : `${Math.abs(metadata.depths[currentDepthIndex])}m`}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Graph component */}
+            <TimeSeriesGraph data={timeSeriesData} loading={loadingTimeSeries} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TimeSeriesGraph({ data, loading }) {
+  const [hoveredPoint, setHoveredPoint] = useState(null);
+
+  if (loading) {
+    return (
+      <div className="h-64 flex flex-col items-center justify-center text-slate-400 gap-2">
+        <Loader2 className="w-8 h-8 animate-spin text-sky-400" />
+        <span className="text-xs">Fetching time series data...</span>
+      </div>
+    );
+  }
+
+  if (!data || !data.values || data.values.length === 0) {
+    return (
+      <div className="h-64 flex items-center justify-center text-slate-400 text-xs">
+        No time series data available for this location.
+      </div>
+    );
+  }
+
+  // Filter out any null/undefined values for calculating min/max
+  const validValues = data.values.filter(v => v !== null && v !== undefined);
+  if (validValues.length === 0) {
+    return (
+      <div className="h-64 flex items-center justify-center text-slate-400 text-xs">
+        All time series values are NaN at this coordinate.
+      </div>
+    );
+  }
+
+  const vMin = Math.min(...validValues);
+  const vMax = Math.max(...validValues);
+  const vRange = vMax - vMin === 0 ? 1 : vMax - vMin;
+
+  // Add 10% padding to graph top/bottom
+  const yMin = vMin - vRange * 0.1;
+  const yMax = vMax + vRange * 0.1;
+  const yRange = yMax - yMin;
+
+  // SVG dimensions
+  const width = 600;
+  const height = 260;
+  const paddingLeft = 50;
+  const paddingRight = 20;
+  const paddingTop = 20;
+  const paddingBottom = 40;
+
+  const chartWidth = width - paddingLeft - paddingRight;
+  const chartHeight = height - paddingTop - paddingBottom;
+
+  // Map coordinates to SVG pixels
+  const getX = (index) => paddingLeft + (index / (data.values.length - 1)) * chartWidth;
+  const getY = (val) => {
+    if (val === null || val === undefined) return null;
+    return paddingTop + chartHeight - ((val - yMin) / yRange) * chartHeight;
+  };
+
+  // Generate path coordinates
+  let pathD = "";
+  const points = [];
+  data.values.forEach((val, idx) => {
+    const x = getX(idx);
+    const y = getY(val);
+    if (y !== null) {
+      points.push({ x, y, val, time: data.times[idx], index: idx });
+      if (pathD === "") {
+        pathD = `M ${x} ${y}`;
+      } else {
+        pathD += ` L ${x} ${y}`;
+      }
+    }
+  });
+
+  // Parse ISO times to user friendly dates
+  const formatTime = (timeStr) => {
+    try {
+      const d = new Date(timeStr);
+      if (isNaN(d.getTime())) return timeStr;
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return timeStr;
+    }
+  };
+
+  // Y axis ticks (5 ticks)
+  const yTicks = [];
+  for (let i = 0; i <= 4; i++) {
+    const val = yMin + (i / 4) * yRange;
+    yTicks.push({
+      val: val,
+      y: getY(val),
+      label: val.toFixed(2)
+    });
+  }
+
+  // X axis ticks (4 ticks)
+  const xTicks = [];
+  const numTimes = data.times.length;
+  if (numTimes > 1) {
+    const indices = [0, Math.floor(numTimes / 3), Math.floor((2 * numTimes) / 3), numTimes - 1];
+    indices.forEach(idx => {
+      if (idx < numTimes && data.times[idx]) {
+        xTicks.push({
+          x: getX(idx),
+          label: formatTime(data.times[idx]).split(' ')[0]
+        });
+      }
+    });
+  }
+
+  // Handle mouse move to display vertical tracker/tooltip
+  const handleMouseMove = (e) => {
+    const svgRect = e.currentTarget.getBoundingClientRect();
+    const mouseX = e.clientX - svgRect.left;
+    
+    // Find closest point by x coordinate
+    let closest = null;
+    let minDiff = Infinity;
+    points.forEach(p => {
+      const diff = Math.abs(p.x - mouseX);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closest = p;
+      }
+    });
+
+    if (minDiff < 30) {
+      setHoveredPoint(closest);
+    } else {
+      setHoveredPoint(null);
+    }
+  };
+
+  return (
+    <div className="relative">
+      <svg 
+        width="100%" 
+        height={height} 
+        viewBox={`0 0 ${width} ${height}`} 
+        className="overflow-visible select-none"
+        onMouseMove={handleMouseMove}
+        onMouseLeave={() => setHoveredPoint(null)}
+      >
+        <defs>
+          <linearGradient id="chart-glow" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.4"/>
+            <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0"/>
+          </linearGradient>
+        </defs>
+
+        {/* Gridlines */}
+        {yTicks.map((tick, i) => (
+          <g key={i} className="opacity-20">
+            <line 
+              x1={paddingLeft} 
+              y1={tick.y} 
+              x2={width - paddingRight} 
+              y2={tick.y} 
+              stroke="#64748b" 
+              strokeWidth="1"
+              strokeDasharray="3,3"
+            />
+            <text 
+              x={paddingLeft - 8} 
+              y={tick.y + 4} 
+              fill="#94a3b8" 
+              fontSize="9" 
+              textAnchor="end"
+              className="font-mono"
+            >
+              {tick.label}
+            </text>
+          </g>
+        ))}
+
+        {/* X axis labels */}
+        {xTicks.map((tick, i) => (
+          <text 
+            key={i}
+            x={tick.x} 
+            y={height - paddingBottom + 16} 
+            fill="#64748b" 
+            fontSize="9" 
+            textAnchor="middle"
+          >
+            {tick.label}
+          </text>
+        ))}
+
+        {/* Shaded Area under path */}
+        {points.length > 1 && (
+          <path
+            d={`${pathD} L ${points[points.length-1].x} ${paddingTop + chartHeight} L ${points[0].x} ${paddingTop + chartHeight} Z`}
+            fill="url(#chart-glow)"
+          />
+        )}
+
+        {/* SVG Line path */}
+        <path 
+          d={pathD} 
+          fill="none" 
+          stroke="#0ea5e9" 
+          strokeWidth="2.5" 
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="drop-shadow-[0_2px_8px_rgba(14,165,233,0.3)]"
+        />
+
+        {/* Interactive hover elements */}
+        {hoveredPoint && (
+          <g>
+            {/* Vertical Tracker Line */}
+            <line 
+              x1={hoveredPoint.x} 
+              y1={paddingTop} 
+              x2={hoveredPoint.x} 
+              y2={paddingTop + chartHeight} 
+              stroke="#0ea5e9" 
+              strokeWidth="1.5"
+              strokeDasharray="2,2"
+              className="opacity-50"
+            />
+            {/* Hover Circle Marker */}
+            <circle 
+              cx={hoveredPoint.x} 
+              cy={hoveredPoint.y} 
+              r="5" 
+              fill="#0ea5e9" 
+              stroke="#ffffff" 
+              strokeWidth="1.5"
+              className="drop-shadow-[0_0_6px_rgba(14,165,233,0.8)]"
+            />
+          </g>
+        )}
+      </svg>
+
+      {/* Floating HTML Tooltip inside the card */}
+      {hoveredPoint && (
+        <div 
+          className="absolute z-20 pointer-events-none bg-slate-950/95 border border-slate-700/80 backdrop-blur rounded-xl p-2.5 shadow-2xl text-xs flex flex-col gap-1 text-slate-100 transition-all duration-75"
+          style={{ 
+            left: `${(hoveredPoint.x / width) * 100}%`, 
+            top: `${(hoveredPoint.y / height) * 100 - 65}%`,
+            transform: 'translateX(-50%)'
+          }}
+        >
+          <div className="text-[9px] font-bold text-slate-500 uppercase">{formatTime(hoveredPoint.time)}</div>
+          <div className="font-semibold text-sky-400">
+            {hoveredPoint.val.toFixed(3)} <span className="text-[10px] text-slate-400">{data.unit}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

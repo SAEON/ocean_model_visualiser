@@ -38,7 +38,7 @@ export default function Admin({ onBack }) {
   const [showCreateMember, setShowCreateMember] = useState(false);
   const [newMemberName, setNewMemberName] = useState('');
   const [variableGroups, setVariableGroups] = useState([
-    { name: '', variables: ['temp'], file_path: '' }
+    { name: '', variables: ['temp'], file_path: '', time_sampling: 1 }
   ]);
   const [savingMember, setSavingMember] = useState(false);
   const [derivingRegion, setDerivingRegion] = useState(false);
@@ -141,7 +141,8 @@ export default function Admin({ onBack }) {
     setEditVariableGroups(member.variable_groups.map(g => ({
       name: g.name || '',
       variables: [...g.variables],
-      file_path: g.file_path
+      file_path: g.file_path,
+      time_sampling: g.time_sampling || 1
     })));
     setErrorMessage('');
     setSuccessMessage('');
@@ -151,7 +152,7 @@ export default function Admin({ onBack }) {
   const handleAddEditVariableGroup = () => {
     setEditVariableGroups([
       ...editVariableGroups,
-      { name: '', variables: ['temp'], file_path: '' }
+      { name: '', variables: ['temp'], file_path: '', time_sampling: 1 }
     ]);
   };
 
@@ -182,6 +183,12 @@ export default function Admin({ onBack }) {
     setEditVariableGroups(updated);
   };
 
+  const handleEditTimeSamplingChange = (groupIndex, value) => {
+    const updated = [...editVariableGroups];
+    updated[groupIndex].time_sampling = value;
+    setEditVariableGroups(updated);
+  };
+
   // Handle Member Update Submission
   const handleUpdateMember = async (e) => {
     e.preventDefault();
@@ -204,7 +211,8 @@ export default function Admin({ onBack }) {
         variable_groups: editVariableGroups.map(g => ({
           name: g.name.trim(),
           variables: g.variables,
-          file_path: g.file_path.trim()
+          file_path: g.file_path.trim(),
+          time_sampling: g.time_sampling || 1
         }))
       };
 
@@ -318,7 +326,7 @@ export default function Admin({ onBack }) {
   const handleAddVariableGroup = () => {
     setVariableGroups([
       ...variableGroups,
-      { name: '', variables: ['temp'], file_path: '' }
+      { name: '', variables: ['temp'], file_path: '', time_sampling: 1 }
     ]);
   };
 
@@ -349,6 +357,12 @@ export default function Admin({ onBack }) {
     setVariableGroups(updated);
   };
 
+  const handleTimeSamplingChange = (groupIndex, value) => {
+    const updated = [...variableGroups];
+    updated[groupIndex].time_sampling = value;
+    setVariableGroups(updated);
+  };
+
   // Handle Member Submission
   const handleCreateMember = async (e) => {
     e.preventDefault();
@@ -372,7 +386,8 @@ export default function Admin({ onBack }) {
         variable_groups: variableGroups.map(g => ({
           name: g.name.trim(),
           variables: g.variables,
-          file_path: g.file_path.trim()
+          file_path: g.file_path.trim(),
+          time_sampling: g.time_sampling || 1
         }))
       };
 
@@ -386,7 +401,7 @@ export default function Admin({ onBack }) {
         const newMember = await res.json();
         setMembers([...members, newMember]);
         setNewMemberName('');
-        setVariableGroups([{ name: '', variables: ['temp'], file_path: '' }]);
+        setVariableGroups([{ name: '', variables: ['temp'], file_path: '', time_sampling: 1 }]);
         setShowCreateMember(false);
         setSuccessMessage(`Member "${newMember.name}" registered and NetCDF dimensions extracted successfully.`);
       } else {
@@ -800,6 +815,24 @@ export default function Admin({ onBack }) {
                                   ))}
                                 </div>
                               </div>
+
+                              {/* Time steps to sample selection */}
+                              <div className="space-y-1.5">
+                                <span className="text-[10px] text-slate-500 uppercase font-semibold">Time steps to sample</span>
+                                <div className="flex flex-wrap gap-4 mt-1">
+                                  {[1, 2, 4, 6].map((val) => (
+                                    <label key={val} className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-300">
+                                      <input 
+                                        type="checkbox"
+                                        checked={(group.time_sampling || 1) === val}
+                                        onChange={() => handleTimeSamplingChange(gIdx, val)}
+                                        className="rounded border-slate-800 bg-slate-900 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-950 w-3.5 h-3.5"
+                                      />
+                                      {val === 1 ? 'Every time step (1)' : `Every ${val} steps`}
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -937,6 +970,24 @@ export default function Admin({ onBack }) {
                                         className="rounded border-slate-800 bg-slate-900 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-950 w-3.5 h-3.5"
                                       />
                                       {v === 'temp' ? 'Temperature' : v === 'salt' ? 'Salinity' : v === 'currents' ? 'Currents' : 'Sea Surface Height (zeta)'}
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* Time steps to sample selection */}
+                              <div className="space-y-1.5">
+                                <span className="text-[10px] text-slate-500 uppercase font-semibold">Time steps to sample</span>
+                                <div className="flex flex-wrap gap-4 mt-1">
+                                  {[1, 2, 4, 6].map((val) => (
+                                    <label key={val} className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-300">
+                                      <input 
+                                        type="checkbox"
+                                        checked={(group.time_sampling || 1) === val}
+                                        onChange={() => handleEditTimeSamplingChange(gIdx, val)}
+                                        className="rounded border-slate-800 bg-slate-900 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-950 w-3.5 h-3.5"
+                                      />
+                                      {val === 1 ? 'Every time step (1)' : `Every ${val} steps`}
                                     </label>
                                   ))}
                                 </div>

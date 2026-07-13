@@ -15,6 +15,7 @@ class VariableGroup(BaseModel):
     file_path: str
     depths: Optional[List[float]] = None
     time_steps: Optional[List[str]] = None
+    time_sampling: Optional[int] = 1
 
 class MemberCreate(BaseModel):
     name: str
