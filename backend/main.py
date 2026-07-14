@@ -270,13 +270,19 @@ async def get_contours(
     z_max = float(np.nanmax(z))
     
     if z_min == z_max:
-        return {"type": "FeatureCollection", "features": []}
+        return {"type": "FeatureCollection", "features": [], "value_min": z_min, "value_max": z_max}
         
-    # Generate 12 levels (giving 11 filled bands)
-    levels = np.linspace(z_min, z_max, 20)
+    p1 = float(np.nanpercentile(z, 1))
+    p99 = float(np.nanpercentile(z, 99))
+    if p1 == p99:
+        p1 = z_min
+        p99 = z_max
+        
+    z_clipped = np.clip(z, p1, p99)
+    levels = np.linspace(p1, p99, 20)
     
     fig, ax = plt.subplots()
-    cs = ax.contourf(lon, lat, z, levels=levels)
+    cs = ax.contourf(lon, lat, z_clipped, levels=levels)
     
     features = []
     for i, path in enumerate(cs.get_paths()):
@@ -355,7 +361,9 @@ async def get_contours(
     
     return {
         "type": "FeatureCollection",
-        "features": features
+        "features": features,
+        "value_min": float(p1),
+        "value_max": float(p99)
     }
 
 @app.get("/api/currents")

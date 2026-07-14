@@ -43,6 +43,29 @@ const INITIAL_VIEW_STATE = {
   minZoom: 3
 };
 
+// Centroid calculator for polygons/multipolygons
+const getCentroid = (geometry) => {
+  if (!geometry) return null;
+  let coords = [];
+  if (geometry.type === 'Polygon') {
+    coords = geometry.coordinates[0];
+  } else if (geometry.type === 'MultiPolygon') {
+    coords = geometry.coordinates[0][0];
+  } else {
+    return null;
+  }
+  let sumLon = 0;
+  let sumLat = 0;
+  coords.forEach(coord => {
+    sumLon += coord[0];
+    sumLat += coord[1];
+  });
+  return {
+    longitude: sumLon / coords.length,
+    latitude: sumLat / coords.length
+  };
+};
+
 // Color Map Stops
 const TEMP_STOPS = [
   { t: 0.0, color: [20, 30, 180] },    // Deep Indigo (Cold)
@@ -246,6 +269,22 @@ function Visualizer({ onNavigateAdmin }) {
     setSelectedMember(null);
     setSelectedGroup(null);
     setMetadata(null);
+
+    // Zoom slightly into the clicked bounding box region
+    const prod = products.find(p => p.id === prodId);
+    if (prod && prod.region) {
+      const centroid = getCentroid(prod.region);
+      if (centroid) {
+        setViewState(prev => ({
+          ...prev,
+          longitude: centroid.longitude,
+          latitude: centroid.latitude,
+          zoom: 5.5,
+          transitionDuration: 1200
+        }));
+      }
+    }
+
     try {
       const res = await fetch(`${API_URL}/api/products/${prodId}/members`);
       if (res.ok) {
@@ -462,6 +501,13 @@ function Visualizer({ onNavigateAdmin }) {
     };
   }, [selectedVariable, currentDepthIndex, metadata]);
 
+  const activeValMin = (showContours && renderedData?.contours?.value_min !== undefined)
+    ? renderedData.contours.value_min
+    : valMin;
+  const activeValMax = (showContours && renderedData?.contours?.value_max !== undefined)
+    ? renderedData.contours.value_max
+    : valMax;
+
   const maxSpeed = useMemo(() => {
     if (!metadata) return 1.5;
     const dIdx = currentDepthIndex;
@@ -501,7 +547,7 @@ function Visualizer({ onNavigateAdmin }) {
           lineWidthMinPixels: 0.5,
           getFillColor: (f) => {
             const val = f.properties.value;
-            const t = (val - valMin) / (valMax - valMin || 1);
+            const t = (val - activeValMin) / (activeValMax - activeValMin || 1);
             const rgb = interpolateColor(t, stops);
             return [...rgb, 150]; // Semi-transparent fill (alpha 150 / 255)
           },
@@ -511,7 +557,7 @@ function Visualizer({ onNavigateAdmin }) {
           maskId: 'land-mask',
           maskInverted: true,
           updateTriggers: {
-            getFillColor: [valMin, valMax, stops]
+            getFillColor: [activeValMin, activeValMax, stops]
           }
         })
       );
@@ -568,11 +614,11 @@ function Visualizer({ onNavigateAdmin }) {
           stroked: false,
           filled: true,
           radiusScale: 1,
-          radiusMinPixels: 2.5,
-          radiusMaxPixels: 6,
+          radiusMinPixels: 1.0,
+          radiusMaxPixels: 10,
           lineWidthMinPixels: 1,
           getPosition: (d) => [d.lng, d.lat],
-          getRadius: (d) => 3,
+          getRadius: (d) => 350,
           getFillColor: [255, 255, 255, 220],
           extensions: maskData ? [new MaskExtension()] : [],
           maskId: 'land-mask',
@@ -600,13 +646,14 @@ function Visualizer({ onNavigateAdmin }) {
     // 3. Product Bounding Boxes
     if (!selectedMember) {
       const productRegions = products
-        .filter(p => p.region)
+        .filter(p => p.region && (!clickedProduct || p.id === clickedProduct.id))
         .map(p => ({
           type: 'Feature',
           geometry: p.region,
           properties: {
             id: p.id,
-            name: p.name
+            name: p.name,
+            isClicked: clickedProduct && p.id === clickedProduct.id
           }
         }));
 
@@ -622,8 +669,8 @@ function Visualizer({ onNavigateAdmin }) {
           filled: true,
           lineWidthScale: 1,
           lineWidthMinPixels: 2,
-          getFillColor: [14, 165, 233, 40], // sky-500 light fill
-          getLineColor: [14, 165, 233, 220], // sky-500 border
+          getFillColor: (f) => f.properties.isClicked ? [14, 165, 233, 100] : [14, 165, 233, 40], // Darker when clicked
+          getLineColor: (f) => f.properties.isClicked ? [14, 165, 233, 255] : [14, 165, 233, 220], // Darker border
           getLineWidth: 2,
           extensions: maskData ? [new MaskExtension()] : [],
           maskId: 'land-mask',
@@ -640,7 +687,7 @@ function Visualizer({ onNavigateAdmin }) {
     }
 
     return layersList;
-  }, [renderedData, showContours, showCurrents, showPoints, pointsData, selectedGroup, selectedVariable, valMin, valMax, stops, vectorScale, maxSpeed, selectedMember, products, maskData]);
+  }, [renderedData, showContours, showCurrents, showPoints, pointsData, selectedGroup, selectedVariable, activeValMin, activeValMax, stops, vectorScale, maxSpeed, selectedMember, products, maskData, clickedProduct]);
 
   // Handle Tooltips
   const getTooltip = ({ object }) => {
@@ -739,11 +786,11 @@ function Visualizer({ onNavigateAdmin }) {
       </DeckGL>
 
       {/* 2. Top Header Title (Full-Width Header) */}
-      <header className="absolute top-0 left-0 right-0 h-16 bg-slate-950/90 border-b border-slate-800/80 backdrop-blur-md shadow-lg z-20 flex items-center justify-between px-6 pointer-events-auto">
+      <header className="absolute top-0 left-0 right-0 h-20 bg-slate-950/90 border-b border-slate-800/80 backdrop-blur-md shadow-lg z-20 flex items-center justify-between px-6 pointer-events-auto">
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-3 bg-slate-900/40 px-3 py-1 rounded-xl border border-slate-850">
-            <img src="/saeon-logo.png" alt="SAEON Logo" className="h-7 w-auto object-contain" />
-            <img src="/somisana-logo.png" alt="SOMISANA Logo" className="h-7 w-auto object-contain" />
+          <div className="flex items-center gap-4 py-1">
+            <img src="/saeon-logo.png" alt="SAEON Logo" className="h-8 w-auto object-contain" />
+            <img src="/somisana-logo.png" alt="SOMISANA Logo" className="h-8 w-auto object-contain" />
           </div>
           <div>
             <h1 className="font-bold text-base text-slate-100 tracking-tight font-outfit">
@@ -786,9 +833,9 @@ function Visualizer({ onNavigateAdmin }) {
             
             {/* Values */}
             <div className="flex flex-col justify-between text-[9px] font-mono text-slate-400 h-full text-left py-0.5">
-              <span>{valMax.toFixed(1)}</span>
-              <span className="text-slate-500">{((valMin + valMax) / 2).toFixed(1)}</span>
-              <span>{valMin.toFixed(1)}</span>
+              <span>{activeValMax.toFixed(selectedVariable === 'temp' ? 1 : 2)}</span>
+              <span className="text-slate-500">{((activeValMin + activeValMax) / 2).toFixed(selectedVariable === 'temp' ? 1 : 2)}</span>
+              <span>{activeValMin.toFixed(selectedVariable === 'temp' ? 1 : 2)}</span>
             </div>
           </div>
 
@@ -800,7 +847,7 @@ function Visualizer({ onNavigateAdmin }) {
       )}
 
       {/* 3. Left Sidebar Control Panel Stack */}
-      <div className="absolute top-[80px] left-6 w-96 z-10 flex flex-col gap-4 pointer-events-auto max-h-[calc(100vh-160px)] overflow-y-auto pr-1">
+      <div className="absolute top-[96px] left-6 w-96 z-10 flex flex-col gap-4 pointer-events-auto max-h-[calc(100vh-176px)] overflow-y-auto pr-1">
         
         {/* Model Visualization block */}
         <main className="w-full bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col shrink-0">
@@ -841,6 +888,7 @@ function Visualizer({ onNavigateAdmin }) {
                   } else {
                     setClickedProduct(null);
                     setProductMembers([]);
+                    setViewState(INITIAL_VIEW_STATE);
                   }
                 }}
                 className="flex items-center gap-1 text-[10px] font-bold text-sky-400 hover:text-sky-300 transition-colors uppercase"
@@ -1110,7 +1158,7 @@ function Visualizer({ onNavigateAdmin }) {
 
                 <div className="space-y-1">
                   <div className="flex justify-between text-[10px] text-slate-400 uppercase">
-                    <span>Currents Downsampling</span>
+                    <span>Downsampling</span>
                     <span className="font-mono text-emerald-400">1 / {downsampleRate}</span>
                   </div>
                   <input
@@ -1121,22 +1169,6 @@ function Visualizer({ onNavigateAdmin }) {
                     value={downsampleRate}
                     onChange={(e) => setDownsampleRate(parseInt(e.target.value))}
                     className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <div className="flex justify-between text-[10px] text-slate-400 uppercase">
-                    <span>Contour Simplification</span>
-                    <span className="font-mono text-amber-400">{simplification} deg</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0.0005"
-                    max="0.005"
-                    step="0.0005"
-                    value={simplification}
-                    onChange={(e) => setSimplification(parseFloat(e.target.value))}
-                    className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
                   />
                 </div>
               </div>
@@ -1244,7 +1276,7 @@ function Visualizer({ onNavigateAdmin }) {
           <div className="flex items-center gap-2 border-l border-slate-900 pl-4 shrink-0">
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Speed</span>
             <div className="flex gap-0.5 bg-slate-900/60 p-0.5 rounded-lg border border-slate-850">
-              {[1, 2, 5, 10, 20].map((speed) => (
+              {[1, 2, 5, 10].map((speed) => (
                 <button
                   key={speed}
                   onClick={() => setPlaybackSpeed(speed)}
@@ -1263,7 +1295,7 @@ function Visualizer({ onNavigateAdmin }) {
       )}
 
       {/* 5. Compass Rose / North arrow (Top Right) */}
-      <div className="absolute top-20 right-4 p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800/80 backdrop-blur-md shadow-xl z-10 flex items-center justify-center pointer-events-auto">
+      <div className="absolute top-24 right-4 p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800/80 backdrop-blur-md shadow-xl z-10 flex items-center justify-center pointer-events-auto">
         <Compass className="w-5 h-5 text-slate-400 animate-[spin_60s_linear_infinite]" />
       </div>
 
@@ -1423,6 +1455,16 @@ function TimeSeriesGraph({ data, loading }) {
     }
   };
 
+  const formatXAxisTime = (timeStr) => {
+    try {
+      const d = new Date(timeStr);
+      if (isNaN(d.getTime())) return timeStr;
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    } catch {
+      return timeStr;
+    }
+  };
+
   // Y axis ticks (5 ticks)
   const yTicks = [];
   for (let i = 0; i <= 4; i++) {
@@ -1443,7 +1485,7 @@ function TimeSeriesGraph({ data, loading }) {
       if (idx < numTimes && data.times[idx]) {
         xTicks.push({
           x: getX(idx),
-          label: formatTime(data.times[idx]).split(' ')[0]
+          label: formatXAxisTime(data.times[idx])
         });
       }
     });
@@ -1491,7 +1533,7 @@ function TimeSeriesGraph({ data, loading }) {
 
         {/* Gridlines */}
         {yTicks.map((tick, i) => (
-          <g key={i} className="opacity-20">
+          <g key={i}>
             <line 
               x1={paddingLeft} 
               y1={tick.y} 
@@ -1500,14 +1542,15 @@ function TimeSeriesGraph({ data, loading }) {
               stroke="#64748b" 
               strokeWidth="1"
               strokeDasharray="3,3"
+              className="opacity-20"
             />
             <text 
               x={paddingLeft - 8} 
               y={tick.y + 4} 
-              fill="#94a3b8" 
+              fill="#cbd5e1" 
               fontSize="9" 
               textAnchor="end"
-              className="font-mono"
+              className="font-mono font-medium"
             >
               {tick.label}
             </text>
@@ -1520,9 +1563,10 @@ function TimeSeriesGraph({ data, loading }) {
             key={i}
             x={tick.x} 
             y={height - paddingBottom + 16} 
-            fill="#64748b" 
+            fill="#cbd5e1" 
             fontSize="9" 
             textAnchor="middle"
+            className="font-medium"
           >
             {tick.label}
           </text>
