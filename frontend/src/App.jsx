@@ -776,6 +776,39 @@ function Visualizer({ onNavigateAdmin }) {
         controller={true}
         layers={layers}
         getTooltip={getTooltip}
+        onClick={(info) => {
+          if (showPoints && pointsData.length > 0 && info.coordinate) {
+            const [clickLng, clickLat] = info.coordinate;
+            let closestPt = null;
+            let minDistance = Infinity;
+
+            for (let i = 0; i < pointsData.length; i++) {
+              const pt = pointsData[i];
+              const dLng = pt.lng - clickLng;
+              const dLat = pt.lat - clickLat;
+              const dist = dLng * dLng + dLat * dLat;
+              if (dist < minDistance) {
+                minDistance = dist;
+                closestPt = pt;
+              }
+            }
+
+            if (closestPt) {
+              const available = selectedGroup?.variables || [];
+              const standardVars = ['temp', 'salt', 'zeta'];
+              const activeStandard = standardVars.includes(selectedVariable) ? selectedVariable : null;
+              const defaultVar = activeStandard || available.find(v => standardVars.includes(v)) || 'temp';
+
+              setClickedPoint({
+                lat: closestPt.lat,
+                lng: closestPt.lng,
+                i: closestPt.i,
+                j: closestPt.j
+              });
+              setTimeSeriesVariable(defaultVar);
+            }
+          }
+        }}
       >
         <Map
           reuseMaps

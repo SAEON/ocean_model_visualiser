@@ -705,6 +705,16 @@ async def create_member(product_id: str, member: MemberCreate):
         }
         
         result = await members_collection.insert_one(member_data)
+        # Clear files from cache just in case
+        for group in processed_groups:
+            fp = group["file_path"]
+            if fp in dataset_cache:
+                try:
+                    dataset_cache[fp][0].close()
+                except Exception:
+                    pass
+                del dataset_cache[fp]
+
         created = await members_collection.find_one({"_id": result.inserted_id})
         return serialize_doc(created)
     except Exception as e:
@@ -985,6 +995,16 @@ async def update_member(member_id: str, member_update: MemberUpdate):
                 "variable_groups": processed_groups
             }}
         )
+        # Clear files from cache so metadata changes take effect immediately
+        for group in processed_groups:
+            fp = group["file_path"]
+            if fp in dataset_cache:
+                try:
+                    dataset_cache[fp][0].close()
+                except Exception:
+                    pass
+                del dataset_cache[fp]
+
         updated = await members_collection.find_one({"_id": obj_id})
         return serialize_doc(updated)
     except Exception as e:
