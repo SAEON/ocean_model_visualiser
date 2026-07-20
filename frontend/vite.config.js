@@ -9,11 +9,12 @@ export default defineConfig({
     port: 5173,
     hmr: false, // Keep this disabled for FortiGate
     proxy: {
-      // Whenever the frontend hits "/api", Vite forwards it locally to 8001
-      '/api': {
-        target: 'http://127.0.0.1:8001',
+      // Catch any request ending in /api (with or without base path subpath)
+      '^/.*api': {
+        target: 'http://127.0.0.1:8080',
         changeOrigin: true,
         secure: false,
+        rewrite: (path) => path.replace(/^.*\/api/, '/api')
       }
     }
   }

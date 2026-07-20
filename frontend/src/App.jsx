@@ -879,6 +879,54 @@ function Visualizer({ onNavigateAdmin }) {
         </section>
       )}
 
+      {/* 4.5. Current Vector Legend */}
+      {selectedMember && metadata && showCurrents && (
+        <section className={`absolute bottom-[54px] ${showContours ? 'left-28' : 'left-6'} w-48 bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-3.5 rounded-2xl shadow-2xl z-10 flex flex-col gap-2.5 pointer-events-auto transition-all`}>
+          {/* Legend Title */}
+          <div className="flex items-center justify-between border-b border-slate-850/60 pb-1.5">
+            <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Vector Scale</span>
+            <span className="text-[9px] font-mono font-bold text-sky-400 bg-sky-950/60 border border-sky-800/50 px-1.5 py-0.5 rounded-md">m/s</span>
+          </div>
+
+          {/* Reference Arrow Scale */}
+          <div className="flex flex-col gap-2 py-0.5">
+            {/* 1.0 m/s arrow */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <svg className="w-16 h-4 overflow-visible" viewBox="0 0 60 16">
+                  <line x1="2" y1="8" x2={Math.min(50, Math.max(14, Math.round(36 * (vectorScale / 0.02))))} y2="8" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" />
+                  <polygon 
+                    points={`${Math.min(50, Math.max(14, Math.round(36 * (vectorScale / 0.02))))},4 ${Math.min(50, Math.max(14, Math.round(36 * (vectorScale / 0.02)))) + 6},8 ${Math.min(50, Math.max(14, Math.round(36 * (vectorScale / 0.02))))},12`} 
+                    fill="#38bdf8" 
+                  />
+                </svg>
+              </div>
+              <span className="text-[10px] font-mono text-slate-200 font-medium">1.0 m/s</span>
+            </div>
+
+            {/* 0.5 m/s arrow */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <svg className="w-16 h-4 overflow-visible" viewBox="0 0 60 16">
+                  <line x1="2" y1="8" x2={Math.min(25, Math.max(7, Math.round(18 * (vectorScale / 0.02))))} y2="8" stroke="#0ea5e9" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="3 1" />
+                  <polygon 
+                    points={`${Math.min(25, Math.max(7, Math.round(18 * (vectorScale / 0.02))))},5 ${Math.min(25, Math.max(7, Math.round(18 * (vectorScale / 0.02)))) + 5},8 ${Math.min(25, Math.max(7, Math.round(18 * (vectorScale / 0.02))))},11`} 
+                    fill="#0ea5e9" 
+                  />
+                </svg>
+              </div>
+              <span className="text-[10px] font-mono text-slate-400">0.5 m/s</span>
+            </div>
+          </div>
+
+          {/* Stats footer */}
+          <div className="border-t border-slate-850/60 pt-1.5 flex items-center justify-between text-[9px] text-slate-400">
+            <span>Max Speed:</span>
+            <span className="font-mono font-bold text-sky-400">{maxSpeed > 0 ? maxSpeed.toFixed(2) : '0.00'} m/s</span>
+          </div>
+        </section>
+      )}
+
       {/* 3. Left Sidebar Control Panel Stack */}
       <div className="absolute top-[96px] left-6 w-96 z-10 flex flex-col gap-4 pointer-events-auto max-h-[calc(100vh-176px)] overflow-y-auto pr-1">
         
