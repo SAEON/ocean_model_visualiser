@@ -2,8 +2,12 @@ import os
 import time
 from typing import Optional
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Query, HTTPException
+from datetime import datetime, timedelta
+from fastapi import FastAPI, Query, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt
+import bcrypt
 import xarray as xr
 import numpy as np
 import matplotlib
@@ -14,7 +18,7 @@ from shapely.validation import make_valid
 from bson import ObjectId
 
 # Database imports
-from backend.database import products_collection, members_collection
+from backend.database import products_collection, members_collection, users_collection
 from backend.schemas import (
     ProductCreate,
     ProductResponse,
@@ -22,8 +26,67 @@ from backend.schemas import (
     MemberCreate,
     MemberResponse,
     MemberUpdate,
+    UserLogin,
+    TokenResponse,
+    UserResponse,
     serialize_doc
 )
+
+# JWT & Authentication Configurations
+SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "somisana-ocean-model-visualiser-secret-key-2026")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+
+security = HTTPBearer()
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    try:
+        pwd_bytes = plain_password.encode('utf-8')
+        hash_bytes = hashed_password.encode('utf-8')
+        return bcrypt.checkpw(pwd_bytes, hash_bytes)
+    except Exception:
+        return False
+
+def get_password_hash(password: str) -> str:
+    pwd_bytes = password.encode('utf-8')
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+async def get_current_admin(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    except jwt.PyJWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token expired or invalid",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    user = await users_collection.find_one({"username": username})
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
 
 # Paths
 NETCDF_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "croco_avg_t2.nc")
@@ -181,6 +244,23 @@ async def lifespan(app: FastAPI):
     else:
         print(f"Warning: Static NetCDF file not found at {NETCDF_PATH}. Skipping cache initialization.")
         
+    # Seed default admin user if not present
+    try:
+        default_user = os.environ.get("ADMIN_USERNAME", "admin")
+        default_pass = os.environ.get("ADMIN_PASSWORD", "admin123")
+        existing_admin = await users_collection.find_one({"username": default_user})
+        if existing_admin is None:
+            hashed = get_password_hash(default_pass)
+            await users_collection.insert_one({
+                "username": default_user,
+                "hashed_password": hashed,
+                "role": "admin",
+                "created_at": datetime.utcnow()
+            })
+            print(f"Seeded default admin user: '{default_user}'")
+    except Exception as e:
+        print(f"Error seeding default admin user: {e}")
+
     yield
     # Cleanup
     if ds is not None:
@@ -202,6 +282,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Authentication Endpoints
+@app.post("/api/auth/login", response_model=TokenResponse)
+async def login(credentials: UserLogin):
+    user = await users_collection.find_one({"username": credentials.username.strip()})
+    if not user or not verify_password(credentials.password, user["hashed_password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token = create_access_token(data={"sub": user["username"], "role": user.get("role", "admin")})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "username": user["username"]
+    }
+
+@app.get("/api/auth/me", response_model=UserResponse)
+async def get_me(current_user: dict = Depends(get_current_admin)):
+    return {
+        "id": str(current_user["_id"]),
+        "username": current_user["username"],
+        "role": current_user.get("role", "admin")
+    }
+
 
 @app.get("/api/metadata")
 async def get_metadata(file_path: Optional[str] = None):
@@ -597,7 +704,7 @@ async def get_timeseries(
 # --- PRODUCTS & MEMBERS API ENDPOINTS ---
 
 @app.post("/api/products", response_model=ProductResponse)
-async def create_product(product: ProductCreate):
+async def create_product(product: ProductCreate, current_user: dict = Depends(get_current_admin)):
     try:
         product_data = product.dict()
         product_data["region"] = None  # Placeholder, to be derived later
@@ -631,7 +738,7 @@ async def get_product(product_id: str):
     return serialize_doc(product)
 
 @app.post("/api/products/{product_id}/members", response_model=MemberResponse)
-async def create_member(product_id: str, member: MemberCreate):
+async def create_member(product_id: str, member: MemberCreate, current_user: dict = Depends(get_current_admin)):
     try:
         prod_obj_id = ObjectId(product_id)
     except Exception:
@@ -749,7 +856,7 @@ async def get_member(member_id: str):
 
 
 @app.post("/api/products/{product_id}/derive_region", response_model=ProductResponse)
-async def derive_product_region(product_id: str):
+async def derive_product_region(product_id: str, current_user: dict = Depends(get_current_admin)):
     try:
         prod_obj_id = ObjectId(product_id)
     except Exception:
@@ -862,7 +969,7 @@ async def derive_product_region(product_id: str):
 
 
 @app.put("/api/products/{product_id}", response_model=ProductResponse)
-async def update_product(product_id: str, product_update: ProductUpdate):
+async def update_product(product_id: str, product_update: ProductUpdate, current_user: dict = Depends(get_current_admin)):
     try:
         prod_obj_id = ObjectId(product_id)
     except Exception:
@@ -884,7 +991,7 @@ async def update_product(product_id: str, product_update: ProductUpdate):
 
 
 @app.delete("/api/products/{product_id}")
-async def delete_product(product_id: str):
+async def delete_product(product_id: str, current_user: dict = Depends(get_current_admin)):
     try:
         prod_obj_id = ObjectId(product_id)
     except Exception:
@@ -905,7 +1012,7 @@ async def delete_product(product_id: str):
 
 
 @app.delete("/api/members/{member_id}")
-async def delete_member(member_id: str):
+async def delete_member(member_id: str, current_user: dict = Depends(get_current_admin)):
     try:
         obj_id = ObjectId(member_id)
     except Exception:
@@ -923,7 +1030,7 @@ async def delete_member(member_id: str):
 
 
 @app.put("/api/members/{member_id}", response_model=MemberResponse)
-async def update_member(member_id: str, member_update: MemberUpdate):
+async def update_member(member_id: str, member_update: MemberUpdate, current_user: dict = Depends(get_current_admin)):
     try:
         obj_id = ObjectId(member_id)
     except Exception:

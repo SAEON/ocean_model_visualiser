@@ -8,3 +8,5 @@ db = client.ocean_visualizer
 # Collections
 products_collection = db.products
 members_collection = db.members
+users_collection = db.users
+

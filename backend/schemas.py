@@ -34,6 +34,21 @@ class MemberUpdate(BaseModel):
     name: str
     variable_groups: List[VariableGroup]
 
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    username: str
+
+class UserResponse(BaseModel):
+    id: str
+    username: str
+    role: str = "admin"
+
+
 def serialize_doc(doc) -> dict:
     """Helper to convert MongoDB document _id and other ObjectIds to strings."""
     if not doc:

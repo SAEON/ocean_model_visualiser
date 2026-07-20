@@ -6,4 +6,6 @@ matplotlib
 shapely
 numpy<2.4.0
 motor
-
+pyjwt
+passlib[bcrypt]
+bcrypt

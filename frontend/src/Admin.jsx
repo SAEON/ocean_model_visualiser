@@ -11,12 +11,27 @@ import {
   Check, 
   Loader2,
   Compass,
-  Pencil
+  Pencil,
+  LogOut,
+  Lock,
+  User,
+  ShieldCheck,
+  Key
 } from 'lucide-react';
 
 import { API_URL } from './config';
 
 export default function Admin({ onBack }) {
+  // Auth State
+  const [token, setToken] = useState(() => localStorage.getItem('token') || '');
+  const [username, setUsername] = useState(() => localStorage.getItem('username') || '');
+
+  // Auth Form State
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
+
   const [products, setProducts] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [members, setMembers] = useState([]);
@@ -52,6 +67,59 @@ export default function Admin({ onBack }) {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
+  // Handle Authentication Login
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    if (!loginUsername.trim() || !loginPassword.trim()) return;
+    setLoggingIn(true);
+    setLoginError('');
+    try {
+      const res = await fetch(`${API_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: loginUsername.trim(), password: loginPassword.trim() })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        localStorage.setItem('token', data.access_token);
+        localStorage.setItem('username', data.username);
+        setToken(data.access_token);
+        setUsername(data.username);
+        setLoginPassword('');
+      } else {
+        const err = await res.json();
+        setLoginError(err.detail || 'Invalid username or password');
+      }
+    } catch (err) {
+      setLoginError('Failed to connect to authentication server.');
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
+  // Handle Logout
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('username');
+    setToken('');
+    setUsername('');
+  };
+
+  // Helper for Authenticated Fetch
+  const authFetch = async (url, options = {}) => {
+    const headers = {
+      ...(options.headers || {}),
+      'Authorization': `Bearer ${token}`
+    };
+    const res = await fetch(url, { ...options, headers });
+    if (res.status === 401) {
+      handleLogout();
+      setErrorMessage('Session expired. Please log in again.');
+      throw new Error('Unauthorized');
+    }
+    return res;
+  };
+
   // Handle Product Update (Rename)
   const handleUpdateProduct = async (e) => {
     e.preventDefault();
@@ -60,7 +128,7 @@ export default function Admin({ onBack }) {
     setErrorMessage('');
     setSuccessMessage('');
     try {
-      const res = await fetch(`${API_URL}/api/products/${editingProduct.id}`, {
+      const res = await authFetch(`${API_URL}/api/products/${editingProduct.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: editProductName.trim() })
@@ -79,7 +147,7 @@ export default function Admin({ onBack }) {
         setErrorMessage(err.detail || 'Failed to rename product.');
       }
     } catch (e) {
-      setErrorMessage('Network error while renaming product.');
+      if (e.message !== 'Unauthorized') setErrorMessage('Network error while renaming product.');
     } finally {
       setSavingEditProduct(false);
     }
@@ -93,7 +161,7 @@ export default function Admin({ onBack }) {
     setErrorMessage('');
     setSuccessMessage('');
     try {
-      const res = await fetch(`${API_URL}/api/products/${productId}`, {
+      const res = await authFetch(`${API_URL}/api/products/${productId}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -107,7 +175,7 @@ export default function Admin({ onBack }) {
         setErrorMessage(err.detail || 'Failed to delete product.');
       }
     } catch (e) {
-      setErrorMessage('Network error while deleting product.');
+      if (e.message !== 'Unauthorized') setErrorMessage('Network error while deleting product.');
     }
   };
 
@@ -119,7 +187,7 @@ export default function Admin({ onBack }) {
     setErrorMessage('');
     setSuccessMessage('');
     try {
-      const res = await fetch(`${API_URL}/api/members/${memberId}`, {
+      const res = await authFetch(`${API_URL}/api/members/${memberId}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -130,7 +198,7 @@ export default function Admin({ onBack }) {
         setErrorMessage(err.detail || 'Failed to delete member.');
       }
     } catch (e) {
-      setErrorMessage('Network error while deleting member.');
+      if (e.message !== 'Unauthorized') setErrorMessage('Network error while deleting member.');
     }
   };
 
@@ -216,7 +284,7 @@ export default function Admin({ onBack }) {
         }))
       };
 
-      const res = await fetch(`${API_URL}/api/members/${editingMember.id}`, {
+      const res = await authFetch(`${API_URL}/api/members/${editingMember.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -232,7 +300,7 @@ export default function Admin({ onBack }) {
         setErrorMessage(err.detail || 'Failed to update member.');
       }
     } catch (e) {
-      setErrorMessage('Network error while updating member.');
+      if (e.message !== 'Unauthorized') setErrorMessage('Network error while updating member.');
     } finally {
       setSavingEditMember(false);
     }
@@ -299,7 +367,7 @@ export default function Admin({ onBack }) {
     setSavingProduct(true);
     setErrorMessage('');
     try {
-      const res = await fetch(`${API_URL}/api/products`, {
+      const res = await authFetch(`${API_URL}/api/products`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newProductName.trim() })
@@ -316,7 +384,7 @@ export default function Admin({ onBack }) {
         setErrorMessage(err.detail || 'Failed to create product.');
       }
     } catch (e) {
-      setErrorMessage('Network error while creating product.');
+      if (e.message !== 'Unauthorized') setErrorMessage('Network error while creating product.');
     } finally {
       setSavingProduct(false);
     }
@@ -391,7 +459,7 @@ export default function Admin({ onBack }) {
         }))
       };
 
-      const res = await fetch(`${API_URL}/api/products/${selectedProduct.id}/members`, {
+      const res = await authFetch(`${API_URL}/api/products/${selectedProduct.id}/members`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -409,7 +477,7 @@ export default function Admin({ onBack }) {
         setErrorMessage(err.detail || 'Failed to register member.');
       }
     } catch (e) {
-      setErrorMessage('Network error while registering member.');
+      if (e.message !== 'Unauthorized') setErrorMessage('Network error while registering member.');
     } finally {
       setSavingMember(false);
     }
@@ -421,7 +489,7 @@ export default function Admin({ onBack }) {
     setErrorMessage('');
     setSuccessMessage('');
     try {
-      const res = await fetch(`${API_URL}/api/products/${selectedProduct.id}/derive_region`, {
+      const res = await authFetch(`${API_URL}/api/products/${selectedProduct.id}/derive_region`, {
         method: 'POST'
       });
       if (res.ok) {
@@ -434,7 +502,7 @@ export default function Admin({ onBack }) {
         setErrorMessage(err.detail || 'Failed to derive bounding shape.');
       }
     } catch (e) {
-      setErrorMessage('Network error while deriving bounding shape.');
+      if (e.message !== 'Unauthorized') setErrorMessage('Network error while deriving bounding shape.');
     } finally {
       setDerivingRegion(false);
     }
@@ -467,6 +535,100 @@ export default function Admin({ onBack }) {
     return { minLng, maxLng, minLat, maxLat, count: coords.length };
   };
 
+  if (!token) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center relative font-sans antialiased p-4">
+        {/* Background Ambient Glow */}
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-sky-500/10 blur-[120px] rounded-full pointer-events-none" />
+
+        <div className="w-full max-w-md bg-slate-900/80 border border-slate-800/80 backdrop-blur-xl rounded-2xl p-8 shadow-2xl z-10 relative">
+          <div className="flex flex-col items-center text-center mb-8">
+            <div className="w-12 h-12 bg-gradient-to-tr from-sky-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-sky-500/20 mb-4">
+              <ShieldCheck className="w-6 h-6 text-white" />
+            </div>
+            <h1 className="text-xl font-bold bg-gradient-to-r from-sky-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent">
+              SOMISANA Ocean Visualizer
+            </h1>
+            <p className="text-xs text-slate-400 mt-1">
+              Admin Portal Authentication
+            </p>
+          </div>
+
+          {loginError && (
+            <div className="mb-6 p-3 bg-red-950/50 border border-red-800/60 rounded-xl flex items-center gap-2.5 text-xs text-red-300">
+              <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+              <span>{loginError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleLogin} className="space-y-5">
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wider">
+                Username
+              </label>
+              <div className="relative">
+                <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  placeholder="Enter administrator username"
+                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition-all"
+                  required
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wider">
+                Password
+              </label>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="Enter administrator password"
+                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition-all"
+                  required
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loggingIn}
+              className="w-full py-3 bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-semibold text-sm rounded-xl shadow-lg shadow-sky-600/25 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {loggingIn ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Authenticating...</span>
+                </>
+              ) : (
+                <>
+                  <Key className="w-4 h-4" />
+                  <span>Log In to Admin Portal</span>
+                </>
+              )}
+            </button>
+          </form>
+
+          <div className="mt-6 pt-6 border-t border-slate-800/80 flex justify-center">
+            <button
+              onClick={onBack}
+              className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Return to Public Dashboard</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans antialiased">
       {/* Top Navbar */}
@@ -488,12 +650,26 @@ export default function Admin({ onBack }) {
             </p>
           </div>
         </div>
-        <button 
-          onClick={onBack}
-          className="flex items-center gap-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-xs font-semibold rounded-lg text-slate-300 hover:text-white transition-all border border-slate-800 hover:border-slate-700"
-        >
-          View Map Dashboard
-        </button>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-300">
+            <User className="w-3.5 h-3.5 text-sky-400" />
+            <span>Administrator: <strong className="text-white">{username}</strong></span>
+          </div>
+          <button 
+            onClick={handleLogout}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-950/40 hover:bg-red-900/50 border border-red-800/60 rounded-lg text-xs font-semibold text-red-300 hover:text-red-100 transition-all"
+            title="Log Out"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Log Out</span>
+          </button>
+          <button 
+            onClick={onBack}
+            className="flex items-center gap-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-xs font-semibold rounded-lg text-slate-300 hover:text-white transition-all border border-slate-800 hover:border-slate-700"
+          >
+            View Map Dashboard
+          </button>
+        </div>
       </header>
 
       {/* Main Container */}

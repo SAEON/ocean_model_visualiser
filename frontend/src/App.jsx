@@ -1688,9 +1688,11 @@ export default function App() {
     setPath(newPath);
   };
 
-  if (path === '/admin') {
-    return <Admin onBack={() => navigate('/')} />;
+  const isAdmin = path.includes('admin');
+
+  if (isAdmin) {
+    return <Admin onBack={() => navigate(window.location.pathname.includes('/ocean_model_visualiser/') ? '/ocean_model_visualiser/' : '/')} />;
   }
   
-  return <Visualizer onNavigateAdmin={() => navigate('/admin')} />;
+  return <Visualizer onNavigateAdmin={() => navigate(window.location.pathname.includes('/ocean_model_visualiser/') ? '/ocean_model_visualiser/admin' : '/admin')} />;
 }
