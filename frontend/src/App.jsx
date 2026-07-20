@@ -147,9 +147,15 @@ function Visualizer({ onNavigateAdmin }) {
   const [timeSeriesVariable, setTimeSeriesVariable] = useState('temp');
   const [loadingTimeSeries, setLoadingTimeSeries] = useState(false);
 
-  // Cache System
-  const [cache, setCache] = useState({});
+  // Independent Caches for Contours and Currents
+  const [contourCache, setContourCache] = useState({});
+  const [currentsCache, setCurrentsCache] = useState({});
   const [maskData, setMaskData] = useState(null);
+
+  const contourCacheRef = useRef({});
+  const currentsCacheRef = useRef({});
+  const fetchingContourKeysRef = useRef(new Set());
+  const fetchingCurrentsKeysRef = useRef(new Set());
 
   // Load mask data on mount
   useEffect(() => {
@@ -186,16 +192,18 @@ function Visualizer({ onNavigateAdmin }) {
         console.error('Failed to load SA province outline mask:', err);
       });
   }, []);
-  const cacheRef = useRef({});
-  const fetchingKeysRef = useRef(new Set());
+
+  // Keep cache refs in sync
+  useEffect(() => {
+    contourCacheRef.current = contourCache;
+  }, [contourCache]);
+
+  useEffect(() => {
+    currentsCacheRef.current = currentsCache;
+  }, [currentsCache]);
 
   // Viewport State
   const [viewState, setViewState] = useState(INITIAL_VIEW_STATE);
-
-  // Keep cacheRef in sync
-  useEffect(() => {
-    cacheRef.current = cache;
-  }, [cache]);
 
   // Fetch Products on mount
   useEffect(() => {
@@ -368,39 +376,34 @@ function Visualizer({ onNavigateAdmin }) {
     handleSelectVariableGroup(firstGroup, member);
   };
 
-  // Fetch helper
-  const fetchStepData = async (filePath, variable, depth, time, downsample, tolerance) => {
-    const key = `${filePath}_${variable}_${depth}_${time}_ds${downsample}_tol${tolerance}`;
+  // Independent Fetch Helpers for Contours and Currents
+  const fetchContourData = async (filePath, variable, depth, time, tolerance) => {
+    const key = `${filePath}_${variable}_${depth}_${time}_tol${tolerance}`;
     try {
       const contourUrl = `${API_URL}/api/contours?variable=${variable}&time=${time}&depth=${depth}&tolerance=${tolerance}` +
         (filePath ? `&file_path=${encodeURIComponent(filePath)}` : '');
-      
-      const currentsDepth = variable === 'zeta' ? 0 : depth;
-      const currentsUrl = `${API_URL}/api/currents?time=${time}&depth=${currentsDepth}&downsample=${downsample}` +
-        (filePath ? `&file_path=${encodeURIComponent(filePath)}` : '');
-
-      // Run both API requests in parallel
-      const [contourRes, currentsRes] = await Promise.all([
-        fetch(contourUrl),
-        fetch(currentsUrl)
-      ]);
-
-      // Parse JSON payloads in parallel
-      const [contours, currents] = await Promise.all([
-        contourRes.json(),
-        currentsRes.json()
-      ]);
-
-      setCache((prev) => ({
-        ...prev,
-        [key]: { contours, currents }
-      }));
+      const res = await fetch(contourUrl);
+      const contours = await res.json();
+      setContourCache((prev) => ({ ...prev, [key]: contours }));
     } catch (err) {
-      console.error(`Failed to fetch key ${key}:`, err);
+      console.error(`Failed to fetch contour key ${key}:`, err);
     }
   };
 
-  // Pre-fetching and sliding-window cache logic
+  const fetchCurrentsData = async (filePath, depth, time, downsample) => {
+    const key = `${filePath}_${depth}_${time}_ds${downsample}`;
+    try {
+      const currentsUrl = `${API_URL}/api/currents?time=${time}&depth=${depth}&downsample=${downsample}` +
+        (filePath ? `&file_path=${encodeURIComponent(filePath)}` : '');
+      const res = await fetch(currentsUrl);
+      const currents = await res.json();
+      setCurrentsCache((prev) => ({ ...prev, [key]: currents }));
+    } catch (err) {
+      console.error(`Failed to fetch currents key ${key}:`, err);
+    }
+  };
+
+  // Independent Pre-fetching and sliding-window cache logic
   useEffect(() => {
     if (!metadata) return;
 
@@ -408,15 +411,25 @@ function Visualizer({ onNavigateAdmin }) {
     const filePath = selectedGroup?.file_path || '';
 
     const ensureData = (timeIdx) => {
-      // Use currents depth 0 if zeta, else current depth
       const dIdx = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
-      const key = `${filePath}_${selectedVariable}_${dIdx}_${timeIdx}_ds${downsampleRate}_tol${simplification}`;
-      
-      if (!cacheRef.current[key] && !fetchingKeysRef.current.has(key)) {
-        fetchingKeysRef.current.add(key);
-        fetchStepData(filePath, selectedVariable, dIdx, timeIdx, downsampleRate, simplification)
-          .then(() => fetchingKeysRef.current.delete(key))
-          .catch(() => fetchingKeysRef.current.delete(key));
+      const contourKey = `${filePath}_${selectedVariable}_${dIdx}_${timeIdx}_tol${simplification}`;
+      const currentsDepth = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
+      const currentsKey = `${filePath}_${currentsDepth}_${timeIdx}_ds${downsampleRate}`;
+
+      // Fetch contours independently if enabled & not cached
+      if (showContours && !contourCacheRef.current[contourKey] && !fetchingContourKeysRef.current.has(contourKey)) {
+        fetchingContourKeysRef.current.add(contourKey);
+        fetchContourData(filePath, selectedVariable, dIdx, timeIdx, simplification)
+          .then(() => fetchingContourKeysRef.current.delete(contourKey))
+          .catch(() => fetchingContourKeysRef.current.delete(contourKey));
+      }
+
+      // Fetch currents independently if enabled & not cached
+      if (showCurrents && !currentsCacheRef.current[currentsKey] && !fetchingCurrentsKeysRef.current.has(currentsKey)) {
+        fetchingCurrentsKeysRef.current.add(currentsKey);
+        fetchCurrentsData(filePath, currentsDepth, timeIdx, downsampleRate)
+          .then(() => fetchingCurrentsKeysRef.current.delete(currentsKey))
+          .catch(() => fetchingCurrentsKeysRef.current.delete(currentsKey));
       }
     };
 
@@ -427,7 +440,6 @@ function Visualizer({ onNavigateAdmin }) {
     }
 
     // 2. Debounce prefetching of remaining buffer steps (+2 to +20)
-    // to prevent browser network socket choking during rapid scrubbing/playback
     const prefetchTimer = setTimeout(() => {
       for (let i = 2; i <= 20; i++) {
         const nextIndex = (currentTimeIndex + i) % numSteps;
@@ -436,7 +448,7 @@ function Visualizer({ onNavigateAdmin }) {
     }, 150);
 
     return () => clearTimeout(prefetchTimer);
-  }, [selectedVariable, currentDepthIndex, currentTimeIndex, downsampleRate, simplification, metadata, selectedGroup]);
+  }, [selectedVariable, currentDepthIndex, currentTimeIndex, downsampleRate, simplification, showContours, showCurrents, metadata, selectedGroup]);
 
   // Playback Loop
   useEffect(() => {
@@ -447,10 +459,13 @@ function Visualizer({ onNavigateAdmin }) {
         const filePath = selectedGroup?.file_path || '';
         
         setCurrentTimeIndex((prev) => {
-          const currentKey = `${filePath}_${selectedVariable}_${dIdx}_${prev}_ds${downsampleRate}_tol${simplification}`;
-          const isCurrentLoaded = !!cacheRef.current[currentKey];
-          
-          if (!isCurrentLoaded) {
+          const contourKey = `${filePath}_${selectedVariable}_${dIdx}_${prev}_tol${simplification}`;
+          const currentsKey = `${filePath}_${dIdx}_${prev}_ds${downsampleRate}`;
+
+          const isContourLoaded = !showContours || !!contourCacheRef.current[contourKey];
+          const isCurrentsLoaded = !showCurrents || !!currentsCacheRef.current[currentsKey];
+
+          if (!isContourLoaded || !isCurrentsLoaded) {
             // The current frame hasn't loaded yet. Stay here and wait.
             return prev;
           }
@@ -463,25 +478,33 @@ function Visualizer({ onNavigateAdmin }) {
     return () => {
       if (timer) clearInterval(timer);
     };
-  }, [isPlaying, playbackSpeed, metadata, selectedVariable, currentDepthIndex, downsampleRate, simplification, selectedGroup]);
+  }, [isPlaying, playbackSpeed, metadata, selectedVariable, currentDepthIndex, downsampleRate, simplification, showContours, showCurrents, selectedGroup]);
 
-  // Active Key
-  const activeKey = useMemo(() => {
+  // Active Keys
+  const activeContourKey = useMemo(() => {
     const dIdx = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
     const filePath = selectedGroup?.file_path || '';
-    return `${filePath}_${selectedVariable}_${dIdx}_${currentTimeIndex}_ds${downsampleRate}_tol${simplification}`;
-  }, [selectedVariable, currentDepthIndex, currentTimeIndex, downsampleRate, simplification, selectedGroup]);
+    return `${filePath}_${selectedVariable}_${dIdx}_${currentTimeIndex}_tol${simplification}`;
+  }, [selectedVariable, currentDepthIndex, currentTimeIndex, simplification, selectedGroup]);
 
-  const activeData = selectedGroup ? cache[activeKey] : null;
-  const isLoading = selectedGroup ? !activeData : false;
+  const activeCurrentsKey = useMemo(() => {
+    const currentsDepth = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
+    const filePath = selectedGroup?.file_path || '';
+    return `${filePath}_${currentsDepth}_${currentTimeIndex}_ds${downsampleRate}`;
+  }, [selectedVariable, currentDepthIndex, currentTimeIndex, downsampleRate, selectedGroup]);
+
+  const activeContours = selectedGroup && showContours ? contourCache[activeContourKey] : null;
+  const activeCurrents = selectedGroup && showCurrents ? currentsCache[activeCurrentsKey] : null;
+  const isLoading = selectedGroup ? ((showContours && !activeContours) || (showCurrents && !activeCurrents)) : false;
 
   // Double-buffering: hold last rendered data to avoid blinks while loading
   const [renderedData, setRenderedData] = useState(null);
   useEffect(() => {
-    if (activeData) {
-      setRenderedData(activeData);
-    }
-  }, [activeData]);
+    setRenderedData((prev) => ({
+      contours: showContours ? (activeContours || prev?.contours || null) : null,
+      currents: showCurrents ? (activeCurrents || prev?.currents || null) : null,
+    }));
+  }, [activeContours, activeCurrents, showContours, showCurrents]);
 
   // Compute color range and stops for current variable
   const { valMin, valMax, stops } = useMemo(() => {
