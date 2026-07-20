@@ -14,7 +14,7 @@ services:
     container_name: ocean-backend
     restart: always
     ports:
-      - "8001:8001"
+      - "8080:8001"
     environment:
       - MONGODB_URL=mongodb://mongodb:27017
     volumes:
