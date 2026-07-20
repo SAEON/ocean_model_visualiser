@@ -822,8 +822,8 @@ function Visualizer({ onNavigateAdmin }) {
       <header className="absolute top-0 left-0 right-0 h-20 bg-slate-950/90 border-b border-slate-800/80 backdrop-blur-md shadow-lg z-20 flex items-center justify-between px-6 pointer-events-auto">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-4 py-1">
-            <img src="/saeon-logo.png" alt="SAEON Logo" className="h-8 w-auto object-contain" />
-            <img src="/somisana-logo.png" alt="SOMISANA Logo" className="h-8 w-auto object-contain" />
+            <img src="./saeon-logo.png" alt="SAEON Logo" className="h-8 w-auto object-contain" />
+            <img src="./somisana-logo.png" alt="SOMISANA Logo" className="h-8 w-auto object-contain" />
           </div>
           <div>
             <h1 className="font-bold text-base text-slate-100 tracking-tight font-outfit">
