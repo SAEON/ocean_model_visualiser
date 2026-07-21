@@ -4,7 +4,7 @@ import { GeoJsonLayer, PathLayer, ScatterplotLayer } from '@deck.gl/layers';
 import { MaskExtension } from '@deck.gl/extensions';
 import Map from 'react-map-gl/maplibre';
 import maplibregl from 'maplibre-gl';
-import { Play, Pause, SkipForward, SkipBack, Settings, Compass, Waves, Layers, Thermometer, Droplets, ArrowRight, ArrowLeft, Loader2, Activity, MapPin, X } from 'lucide-react';
+import { Play, Pause, SkipForward, SkipBack, Settings, Compass, Waves, Layers, Thermometer, Droplets, ArrowRight, ArrowLeft, Loader2, Activity, MapPin, X, ExternalLink } from 'lucide-react';
 import Admin from './Admin';
 
 import { API_URL } from './config';
@@ -439,9 +439,9 @@ function Visualizer({ onNavigateAdmin }) {
       ensureData((currentTimeIndex + 1) % numSteps);
     }
 
-    // 2. Debounce prefetching of remaining buffer steps (+2 to +20)
+    // 2. Debounce prefetching of remaining buffer steps (+2 to +80)
     const prefetchTimer = setTimeout(() => {
-      for (let i = 2; i <= 20; i++) {
+      for (let i = 2; i <= 80; i++) {
         const nextIndex = (currentTimeIndex + i) % numSteps;
         ensureData(nextIndex);
       }
@@ -531,6 +531,18 @@ function Visualizer({ onNavigateAdmin }) {
     ? renderedData.contours.value_max
     : valMax;
 
+  const legendValues = useMemo(() => {
+    const decimals = selectedVariable === 'temp' ? 1 : 2;
+    const range = activeValMax - activeValMin;
+    return [
+      activeValMax.toFixed(decimals),
+      (activeValMin + range * 0.75).toFixed(decimals),
+      (activeValMin + range * 0.50).toFixed(decimals),
+      (activeValMin + range * 0.25).toFixed(decimals),
+      activeValMin.toFixed(decimals),
+    ];
+  }, [activeValMin, activeValMax, selectedVariable]);
+
   const maxSpeed = useMemo(() => {
     if (!metadata) return 1.5;
     const dIdx = currentDepthIndex;
@@ -541,6 +553,24 @@ function Visualizer({ onNavigateAdmin }) {
     const vMax = Math.max(Math.abs(vRange.min), Math.abs(vRange.max));
     return Math.sqrt(uMax * uMax + vMax * vMax);
   }, [metadata, currentDepthIndex]);
+
+  const { currentMinSpeed, currentMaxSpeed } = useMemo(() => {
+    if (!renderedData?.currents || renderedData.currents.length === 0) {
+      return { currentMinSpeed: 0, currentMaxSpeed: maxSpeed || 0 };
+    }
+    let minS = Infinity;
+    let maxS = -Infinity;
+    for (let i = 0; i < renderedData.currents.length; i++) {
+      const d = renderedData.currents[i];
+      const s = Math.sqrt(d.u * d.u + d.v * d.v);
+      if (s < minS) minS = s;
+      if (s > maxS) maxS = s;
+    }
+    return {
+      currentMinSpeed: isFinite(minS) ? minS : 0,
+      currentMaxSpeed: isFinite(maxS) ? maxS : 0
+    };
+  }, [renderedData?.currents, maxSpeed]);
 
   // Construct Deck.gl Layers
   const layers = useMemo(() => {
@@ -842,43 +872,71 @@ function Visualizer({ onNavigateAdmin }) {
       </DeckGL>
 
       {/* 2. Top Header Title (Full-Width Header) */}
-      <header className="absolute top-0 left-0 right-0 h-20 bg-slate-950/90 border-b border-slate-800/80 backdrop-blur-md shadow-lg z-20 flex items-center justify-between px-6 pointer-events-auto">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-4 py-1">
-            <img src={`${import.meta.env.BASE_URL}saeon-logo.png`} alt="SAEON Logo" className="h-8 w-auto object-contain" />
-            <img src={`${import.meta.env.BASE_URL}somisana-logo.png`} alt="SOMISANA Logo" className="h-8 w-auto object-contain" />
+      <header className="absolute top-0 left-0 right-0 h-20 bg-slate-950/90 border-b border-slate-800/80 backdrop-blur-md shadow-lg z-20 flex items-center justify-between px-6 pointer-events-auto gap-4">
+        {/* Left: Clickable Logos & Title */}
+        <div className="flex items-center gap-4 shrink-0">
+          <div className="flex items-center gap-3 py-1">
+            <a 
+              href="https://www.saeon.ac.za/" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="hover:opacity-80 transition-opacity"
+              title="Visit NRF SAEON Website"
+            >
+              <img src={`${import.meta.env.BASE_URL}saeon-logo.png`} alt="SAEON Logo" className="h-8 w-auto object-contain" />
+            </a>
+            <a 
+              href="https://somisana.ac.za/" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="hover:opacity-80 transition-opacity"
+              title="Visit SOMISANA Website"
+            >
+              <img src={`${import.meta.env.BASE_URL}somisana-logo.png`} alt="SOMISANA Logo" className="h-8 w-auto object-contain" />
+            </a>
           </div>
+          <div className="h-6 w-[1px] bg-slate-800/80 hidden sm:block"></div>
           <div>
             <h1 className="font-bold text-base text-slate-100 tracking-tight font-outfit">
-              SOMISANA Ocean Models
+              Ocean Model Visualiser
             </h1>
-            <p className="text-[10px] text-slate-400">
-              {selectedMember 
-                ? `Active Model: ${selectedMember.name} (Region: ${clickedProduct?.name || 'Unknown'})` 
-                : clickedProduct 
-                  ? `Region: ${clickedProduct.name} - Select a member model to begin` 
-                  : "Select a region to explore"}
-            </p>
           </div>
         </div>
-        <div className="flex items-center gap-4">
-          <button
-            onClick={onNavigateAdmin}
-            className="px-3 py-1.5 bg-slate-900 hover:bg-slate-850 text-xs font-bold uppercase tracking-wider rounded-lg text-slate-400 hover:text-slate-100 transition-colors border border-slate-800 hover:border-slate-700"
+
+        {/* Center: Active Model & Region status text */}
+        <div className="flex-1 flex justify-center items-center px-4 text-center">
+          <p className="text-xs text-slate-300 font-medium bg-slate-900/80 border border-slate-800/80 px-4 py-1.5 rounded-full shadow-inner truncate max-w-xl">
+            {selectedMember 
+              ? `Active Model: ${selectedMember.name} (Region: ${clickedProduct?.name || 'Unknown'})` 
+              : clickedProduct 
+                ? `Region: ${clickedProduct.name} - Select a member model to begin` 
+                : "Select a region to explore"}
+          </p>
+        </div>
+
+        {/* Right: Access Data link button */}
+        <div className="flex items-center gap-3 shrink-0">
+          <a
+            href="https://catalog.somisana.ac.za/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3.5 py-2 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/40 hover:border-sky-400 text-xs font-bold uppercase tracking-wider rounded-xl transition-all shadow-md flex items-center gap-1.5 group"
+            title="Access SOMISANA Data Catalog"
           >
-            Admin Portal
-          </button>
+            <span>Access Data</span>
+            <ExternalLink className="w-3.5 h-3.5 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+          </a>
         </div>
       </header>      {/* 4. Color Scale Legends (Bottom Left) - Now vertical */}
       {selectedMember && metadata && showContours && (
-        <section className="absolute bottom-[54px] left-6 w-20 h-72 bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-4 rounded-2xl shadow-2xl z-10 flex flex-col items-center justify-between pointer-events-auto">
+        <section className="absolute bottom-[54px] left-6 w-20 h-76 bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-3.5 rounded-2xl shadow-2xl z-10 flex flex-col items-center justify-between pointer-events-auto">
           {/* Label at the top */}
           <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider text-center truncate max-w-full pb-1 border-b border-slate-900 w-full">
             {selectedVariable === 'temp' ? 'Temp' : selectedVariable === 'salt' ? 'Salt' : 'SSH'}
           </div>
           
           {/* Ramp Container */}
-          <div className="flex-1 w-full flex justify-center gap-3 my-3">
+          <div className="flex-1 w-full flex justify-center gap-2.5 my-2.5">
             {/* Color bar */}
             <div
               className="w-2.5 h-full rounded-md shadow-inner"
@@ -887,65 +945,68 @@ function Visualizer({ onNavigateAdmin }) {
               }}
             ></div>
             
-            {/* Values */}
+            {/* 5 Values */}
             <div className="flex flex-col justify-between text-[9px] font-mono text-slate-400 h-full text-left py-0.5">
-              <span>{activeValMax.toFixed(selectedVariable === 'temp' ? 1 : 2)}</span>
-              <span className="text-slate-500">{((activeValMin + activeValMax) / 2).toFixed(selectedVariable === 'temp' ? 1 : 2)}</span>
-              <span>{activeValMin.toFixed(selectedVariable === 'temp' ? 1 : 2)}</span>
+              {legendValues.map((val, i) => (
+                <span
+                  key={i}
+                  className={
+                    i === 0 || i === legendValues.length - 1
+                      ? "text-slate-200 font-medium"
+                      : i === 2
+                      ? "text-slate-300"
+                      : "text-slate-500"
+                  }
+                >
+                  {val}
+                </span>
+              ))}
             </div>
           </div>
 
           {/* Unit at the bottom */}
-          <div className="text-[9px] font-bold text-slate-500 text-center">
+          <div className="text-[9px] font-bold text-slate-500 text-center pt-1 border-t border-slate-900 w-full">
             {selectedVariable === 'temp' ? '°C' : selectedVariable === 'salt' ? 'g/kg' : 'm'}
           </div>
         </section>
       )}
 
-      {/* 4.5. Current Vector Legend */}
+      {/* 4.5. Current Vector Range Legend */}
       {selectedMember && metadata && showCurrents && (
         <section className={`absolute bottom-[54px] ${showContours ? 'left-28' : 'left-6'} w-48 bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-3.5 rounded-2xl shadow-2xl z-10 flex flex-col gap-2.5 pointer-events-auto transition-all`}>
           {/* Legend Title */}
           <div className="flex items-center justify-between border-b border-slate-850/60 pb-1.5">
-            <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Vector Scale</span>
+            <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Vector Range</span>
             <span className="text-[9px] font-mono font-bold text-sky-400 bg-sky-950/60 border border-sky-800/50 px-1.5 py-0.5 rounded-md">m/s</span>
           </div>
 
-          {/* Reference Arrow Scale */}
+          {/* Reference Arrow Scale (Decoupled static arrows for max and min) */}
           <div className="flex flex-col gap-2 py-0.5">
-            {/* 1.0 m/s arrow */}
+            {/* Max vector arrow */}
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <svg className="w-16 h-4 overflow-visible" viewBox="0 0 60 16">
-                  <line x1="2" y1="8" x2={Math.min(50, Math.max(14, Math.round(36 * (vectorScale / 0.02))))} y2="8" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" />
-                  <polygon 
-                    points={`${Math.min(50, Math.max(14, Math.round(36 * (vectorScale / 0.02))))},4 ${Math.min(50, Math.max(14, Math.round(36 * (vectorScale / 0.02)))) + 6},8 ${Math.min(50, Math.max(14, Math.round(36 * (vectorScale / 0.02))))},12`} 
-                    fill="#38bdf8" 
-                  />
+                <svg className="w-20 h-4 overflow-visible" viewBox="0 0 80 16">
+                  <line x1="2" y1="8" x2="68" y2="8" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" />
+                  <polygon points="68,4 75,8 68,12" fill="#38bdf8" />
                 </svg>
               </div>
-              <span className="text-[10px] font-mono text-slate-200 font-medium">1.0 m/s</span>
+              <span className="text-[10px] font-mono text-slate-200 font-medium">
+                {currentMaxSpeed.toFixed(2)} m/s
+              </span>
             </div>
 
-            {/* 0.5 m/s arrow */}
+            {/* Min vector arrow */}
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <svg className="w-16 h-4 overflow-visible" viewBox="0 0 60 16">
-                  <line x1="2" y1="8" x2={Math.min(25, Math.max(7, Math.round(18 * (vectorScale / 0.02))))} y2="8" stroke="#0ea5e9" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="3 1" />
-                  <polygon 
-                    points={`${Math.min(25, Math.max(7, Math.round(18 * (vectorScale / 0.02))))},5 ${Math.min(25, Math.max(7, Math.round(18 * (vectorScale / 0.02)))) + 5},8 ${Math.min(25, Math.max(7, Math.round(18 * (vectorScale / 0.02))))},11`} 
-                    fill="#0ea5e9" 
-                  />
+                <svg className="w-20 h-4 overflow-visible" viewBox="0 0 80 16">
+                  <line x1="2" y1="8" x2="18" y2="8" stroke="#0ea5e9" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="3 1" />
+                  <polygon points="18,5 23,8 18,11" fill="#0ea5e9" />
                 </svg>
               </div>
-              <span className="text-[10px] font-mono text-slate-400">0.5 m/s</span>
+              <span className="text-[10px] font-mono text-slate-400">
+                {currentMinSpeed.toFixed(2)} m/s
+              </span>
             </div>
-          </div>
-
-          {/* Stats footer */}
-          <div className="border-t border-slate-850/60 pt-1.5 flex items-center justify-between text-[9px] text-slate-400">
-            <span>Max Speed:</span>
-            <span className="font-mono font-bold text-sky-400">{maxSpeed > 0 ? maxSpeed.toFixed(2) : '0.00'} m/s</span>
           </div>
         </section>
       )}
@@ -1111,12 +1172,6 @@ function Visualizer({ onNavigateAdmin }) {
               ) : productMembers.length === 0 ? (
                 <div className="py-8 text-center space-y-2 border border-dashed border-slate-800 rounded-xl">
                   <p className="text-xs text-slate-500">No member models added yet.</p>
-                  <button
-                    onClick={onNavigateAdmin}
-                    className="text-[10px] font-bold text-sky-400 hover:text-sky-300"
-                  >
-                    Manage Models in Admin
-                  </button>
                 </div>
               ) : (
                 <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
@@ -1150,12 +1205,6 @@ function Visualizer({ onNavigateAdmin }) {
               {products.length === 0 ? (
                 <div className="py-8 text-center space-y-2 border border-dashed border-slate-800 rounded-xl">
                   <p className="text-xs text-slate-500">No regions or products configured.</p>
-                  <button
-                    onClick={onNavigateAdmin}
-                    className="text-[10px] font-bold text-sky-400 hover:text-sky-300"
-                  >
-                    Add Products in Admin
-                  </button>
                 </div>
               ) : (
                 <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
@@ -1398,10 +1447,7 @@ function Visualizer({ onNavigateAdmin }) {
         </section>
       )}
 
-      {/* 5. Compass Rose / North arrow (Top Right) */}
-      <div className="absolute top-24 right-4 p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800/80 backdrop-blur-md shadow-xl z-10 flex items-center justify-center pointer-events-auto">
-        <Compass className="w-5 h-5 text-slate-400 animate-[spin_60s_linear_infinite]" />
-      </div>
+
 
       {/* 6. Time Series Modal */}
       {clickedPoint && (

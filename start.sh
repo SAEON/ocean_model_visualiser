@@ -8,8 +8,8 @@ echo "🚀 Starting Ocean Model Visualizer System"
 echo "=================================================="
 
 # Start backend server
-echo "📡 Starting FastAPI backend on port 8001..."
-.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8001 &
+echo "📡 Starting FastAPI backend on port 8080..."
+.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8080 &
 
 # Wait for backend
 sleep 2
