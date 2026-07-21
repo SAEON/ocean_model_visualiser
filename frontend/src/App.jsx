@@ -113,6 +113,21 @@ function interpolateColor(t, stops) {
   return stops[stops.length - 1].color;
 }
 
+const getZoomParameters = (zoom) => {
+  const z = zoom || 5.8;
+  if (z < 5.5)  return { downsample: 10, maxPixels: 5 };
+  if (z < 6.0)  return { downsample: 10, maxPixels: 10 };
+  if (z < 6.5)  return { downsample: 8,  maxPixels: 10 };
+  if (z < 7.0)  return { downsample: 7,  maxPixels: 15 };
+  if (z < 7.5)  return { downsample: 6,  maxPixels: 15 };
+  if (z < 8.0)  return { downsample: 5,  maxPixels: 15 };
+  if (z < 9.0)  return { downsample: 5,  maxPixels: 20 };
+  if (z < 10.0) return { downsample: 4,  maxPixels: 30 };
+  if (z < 11.0) return { downsample: 3,  maxPixels: 30 };
+  if (z < 12.0) return { downsample: 2,  maxPixels: 30 };
+  return { downsample: 1, maxPixels: 30 };
+};
+
 function Visualizer({ onNavigateAdmin }) {
   // Products & region selection states
   const [products, setProducts] = useState([]);
@@ -133,7 +148,7 @@ function Visualizer({ onNavigateAdmin }) {
   const [showContours, setShowContours] = useState(true);
   
   // Customization States
-  const [vectorScale, setVectorScale] = useState(0.02);
+  const [targetMaxPixels, setTargetMaxPixels] = useState(40);
   const [downsampleRate, setDownsampleRate] = useState(3);
   const [simplification, setSimplification] = useState(0.001);
   const [showSettings, setShowSettings] = useState(false);
@@ -205,6 +220,30 @@ function Visualizer({ onNavigateAdmin }) {
   // Viewport State
   const [viewState, setViewState] = useState(INITIAL_VIEW_STATE);
 
+  // Dynamic Zoom-driven Downsampling & Max Pixel Scaling
+  const { autoDownsampleRate, autoMaxPixels, quantizedZoom } = useMemo(() => {
+    const z = viewState?.zoom || 5.8;
+    const params = getZoomParameters(z);
+    
+    let qz = 12.0;
+    if (z < 5.5)  qz = 5.0;
+    else if (z < 6.0)  qz = 5.5;
+    else if (z < 6.5)  qz = 6.0;
+    else if (z < 7.0)  qz = 6.5;
+    else if (z < 7.5)  qz = 7.0;
+    else if (z < 8.0)  qz = 7.5;
+    else if (z < 9.0)  qz = 8.0;
+    else if (z < 10.0) qz = 9.0;
+    else if (z < 11.0) qz = 10.0;
+    else if (z < 12.0) qz = 11.0;
+
+    return {
+      autoDownsampleRate: params.downsample,
+      autoMaxPixels: params.maxPixels,
+      quantizedZoom: qz
+    };
+  }, [viewState?.zoom]);
+
   // Fetch Products on mount
   useEffect(() => {
     fetch(`${API_URL}/api/products`)
@@ -221,7 +260,7 @@ function Visualizer({ onNavigateAdmin }) {
       });
   }, []);
 
-  // Fetch grid points when group or downsampling changes
+  // Fetch grid points when group changes (fixed rate, independent of current vector downsampling)
   useEffect(() => {
     if (!selectedGroup) {
       setPointsData([]);
@@ -229,7 +268,7 @@ function Visualizer({ onNavigateAdmin }) {
     }
     const filePath = selectedGroup.file_path;
     setLoadingPoints(true);
-    fetch(`${API_URL}/api/points?file_path=${encodeURIComponent(filePath)}&downsample=${downsampleRate}`)
+    fetch(`${API_URL}/api/points?file_path=${encodeURIComponent(filePath)}&downsample=3`)
       .then((res) => {
         if (!res.ok) throw new Error('API server returned error');
         return res.json();
@@ -243,7 +282,7 @@ function Visualizer({ onNavigateAdmin }) {
       .finally(() => {
         setLoadingPoints(false);
       });
-  }, [selectedGroup, downsampleRate]);
+  }, [selectedGroup]);
 
   // Fetch time series data when clickedPoint, variable, or depth changes
   useEffect(() => {
@@ -390,10 +429,10 @@ function Visualizer({ onNavigateAdmin }) {
     }
   };
 
-  const fetchCurrentsData = async (filePath, depth, time, downsample) => {
-    const key = `${filePath}_${depth}_${time}_ds${downsample}`;
+  const fetchCurrentsData = async (filePath, depth, time) => {
+    const key = `${filePath}_${depth}_${time}`;
     try {
-      const currentsUrl = `${API_URL}/api/currents?time=${time}&depth=${depth}&downsample=${downsample}` +
+      const currentsUrl = `${API_URL}/api/currents?time=${time}&depth=${depth}&downsample=1` +
         (filePath ? `&file_path=${encodeURIComponent(filePath)}` : '');
       const res = await fetch(currentsUrl);
       const currents = await res.json();
@@ -414,7 +453,7 @@ function Visualizer({ onNavigateAdmin }) {
       const dIdx = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
       const contourKey = `${filePath}_${selectedVariable}_${dIdx}_${timeIdx}_tol${simplification}`;
       const currentsDepth = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
-      const currentsKey = `${filePath}_${currentsDepth}_${timeIdx}_ds${downsampleRate}`;
+      const currentsKey = `${filePath}_${currentsDepth}_${timeIdx}`;
 
       // Fetch contours independently if enabled & not cached
       if (showContours && !contourCacheRef.current[contourKey] && !fetchingContourKeysRef.current.has(contourKey)) {
@@ -427,7 +466,7 @@ function Visualizer({ onNavigateAdmin }) {
       // Fetch currents independently if enabled & not cached
       if (showCurrents && !currentsCacheRef.current[currentsKey] && !fetchingCurrentsKeysRef.current.has(currentsKey)) {
         fetchingCurrentsKeysRef.current.add(currentsKey);
-        fetchCurrentsData(filePath, currentsDepth, timeIdx, downsampleRate)
+        fetchCurrentsData(filePath, currentsDepth, timeIdx)
           .then(() => fetchingCurrentsKeysRef.current.delete(currentsKey))
           .catch(() => fetchingCurrentsKeysRef.current.delete(currentsKey));
       }
@@ -448,7 +487,7 @@ function Visualizer({ onNavigateAdmin }) {
     }, 150);
 
     return () => clearTimeout(prefetchTimer);
-  }, [selectedVariable, currentDepthIndex, currentTimeIndex, downsampleRate, simplification, showContours, showCurrents, metadata, selectedGroup]);
+  }, [selectedVariable, currentDepthIndex, currentTimeIndex, simplification, showContours, showCurrents, metadata, selectedGroup]);
 
   // Playback Loop
   useEffect(() => {
@@ -460,7 +499,7 @@ function Visualizer({ onNavigateAdmin }) {
         
         setCurrentTimeIndex((prev) => {
           const contourKey = `${filePath}_${selectedVariable}_${dIdx}_${prev}_tol${simplification}`;
-          const currentsKey = `${filePath}_${dIdx}_${prev}_ds${downsampleRate}`;
+          const currentsKey = `${filePath}_${dIdx}_${prev}`;
 
           const isContourLoaded = !showContours || !!contourCacheRef.current[contourKey];
           const isCurrentsLoaded = !showCurrents || !!currentsCacheRef.current[currentsKey];
@@ -478,7 +517,7 @@ function Visualizer({ onNavigateAdmin }) {
     return () => {
       if (timer) clearInterval(timer);
     };
-  }, [isPlaying, playbackSpeed, metadata, selectedVariable, currentDepthIndex, downsampleRate, simplification, showContours, showCurrents, selectedGroup]);
+  }, [isPlaying, playbackSpeed, metadata, selectedVariable, currentDepthIndex, simplification, showContours, showCurrents, selectedGroup]);
 
   // Active Keys
   const activeContourKey = useMemo(() => {
@@ -490,8 +529,8 @@ function Visualizer({ onNavigateAdmin }) {
   const activeCurrentsKey = useMemo(() => {
     const currentsDepth = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
     const filePath = selectedGroup?.file_path || '';
-    return `${filePath}_${currentsDepth}_${currentTimeIndex}_ds${downsampleRate}`;
-  }, [selectedVariable, currentDepthIndex, currentTimeIndex, downsampleRate, selectedGroup]);
+    return `${filePath}_${currentsDepth}_${currentTimeIndex}`;
+  }, [selectedVariable, currentDepthIndex, currentTimeIndex, selectedGroup]);
 
   const activeContours = selectedGroup && showContours ? contourCache[activeContourKey] : null;
   const activeCurrents = selectedGroup && showCurrents ? currentsCache[activeCurrentsKey] : null;
@@ -505,6 +544,18 @@ function Visualizer({ onNavigateAdmin }) {
       currents: showCurrents ? (activeCurrents || prev?.currents || null) : null,
     }));
   }, [activeContours, activeCurrents, showContours, showCurrents]);
+
+  // 2D Grid Downsampling in JS (Zero network latency when zooming)
+  const displayCurrents = useMemo(() => {
+    if (!renderedData?.currents) return [];
+    if (autoDownsampleRate <= 1) return renderedData.currents;
+    const step = autoDownsampleRate;
+    return renderedData.currents.filter((pt) => 
+      (pt.i !== undefined && pt.j !== undefined) 
+        ? (pt.i % step === 0 && pt.j % step === 0) 
+        : true
+    );
+  }, [renderedData?.currents, autoDownsampleRate]);
 
   // Compute color range and stops for current variable
   const { valMin, valMax, stops } = useMemo(() => {
@@ -617,24 +668,30 @@ function Visualizer({ onNavigateAdmin }) {
     }
 
     // 2. Currents Layers (Path-based Arrow Vectors)
-    if (showCurrents && renderedData?.currents && selectedMember) {
+    if (showCurrents && displayCurrents.length > 0 && selectedMember) {
+      // Stepped zoom vector scaling: keeps vector path calculation static between zoom breakpoints for 60 FPS performance
+      const latRad = ((viewState?.latitude || -34) * Math.PI) / 180;
+      const degPerPixel = 360 / (256 * Math.pow(2, quantizedZoom) * Math.cos(latRad));
+      const TARGET_MAX_PIXELS = autoMaxPixels;
+      const refMaxSpeed = currentMaxSpeed > 0 ? currentMaxSpeed : (maxSpeed || 1.5);
+      const dynamicVectorScale = (TARGET_MAX_PIXELS * degPerPixel) / refMaxSpeed;
+
       layersList.push(
         new PathLayer({
           id: 'currents-arrows',
-          data: renderedData.currents,
+          data: displayCurrents,
           pickable: true,
           widthMinPixels: 1.5,
           widthMaxPixels: 3.5,
           getPath: (d) => {
-            const dx = d.u * vectorScale;
-            const dy = d.v * vectorScale;
+            const dx = d.u * dynamicVectorScale;
+            const dy = d.v * dynamicVectorScale;
             const L = Math.sqrt(dx * dx + dy * dy);
             if (L === 0) return [[d.lng, d.lat], [d.lng, d.lat]];
             const theta = Math.atan2(dy, dx);
             
-            // 8 pixels in degrees at current zoom level to keep head proportion clean
-            const pixelSize = 360 / (256 * Math.pow(2, viewState.zoom));
-            const barbLength = Math.min(L * 0.35, 8 * pixelSize);
+            // Arrowhead barb length (up to 7 pixels in degrees)
+            const barbLength = Math.min(L * 0.35, 7 * degPerPixel);
             
             return [
               [d.lng, d.lat],
@@ -650,7 +707,7 @@ function Visualizer({ onNavigateAdmin }) {
           maskId: 'land-mask',
           maskInverted: true,
           updateTriggers: {
-            getPath: [vectorScale, viewState.zoom]
+            getPath: [displayCurrents, autoMaxPixels, autoDownsampleRate, quantizedZoom, currentMaxSpeed, maxSpeed]
           }
         })
       );
@@ -740,7 +797,7 @@ function Visualizer({ onNavigateAdmin }) {
     }
 
     return layersList;
-  }, [renderedData, showContours, showCurrents, showPoints, pointsData, selectedGroup, selectedVariable, activeValMin, activeValMax, stops, vectorScale, maxSpeed, selectedMember, products, maskData, clickedProduct]);
+  }, [renderedData, displayCurrents, showContours, showCurrents, showPoints, pointsData, selectedGroup, selectedVariable, activeValMin, activeValMax, stops, autoMaxPixels, autoDownsampleRate, quantizedZoom, maxSpeed, currentMaxSpeed, selectedMember, products, maskData, clickedProduct]);
 
   // Handle Tooltips
   const getTooltip = ({ object }) => {
@@ -927,7 +984,19 @@ function Visualizer({ onNavigateAdmin }) {
             <ExternalLink className="w-3.5 h-3.5 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
           </a>
         </div>
-      </header>      {/* 4. Color Scale Legends (Bottom Left) - Now vertical */}
+      </header>
+
+      {/* 2.1. Top Banner Loading Bar */}
+      {(isLoading || loadingMembers || loadingPoints || loadingTimeSeries) && (
+        <div className="absolute top-20 left-0 right-0 h-5 bg-slate-950/95 border-b border-sky-500/30 backdrop-blur-md z-20 flex items-center px-6 gap-3 shadow-lg transition-all">
+          <span className="text-[9px] font-mono font-bold text-sky-400 uppercase tracking-widest shrink-0">
+            loading:
+          </span>
+          <div className="flex-1 h-1 bg-slate-900 rounded-full overflow-hidden relative border border-slate-800/80">
+            <div className="absolute top-0 bottom-0 bg-gradient-to-r from-sky-500 via-emerald-400 to-sky-400 rounded-full animate-progress-bar shadow-[0_0_8px_rgba(56,189,248,0.6)]"></div>
+          </div>
+        </div>
+      )}
       {selectedMember && metadata && showContours && (
         <section className="absolute bottom-[54px] left-6 w-20 h-76 bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-3.5 rounded-2xl shadow-2xl z-10 flex flex-col items-center justify-between pointer-events-auto">
           {/* Label at the top */}
@@ -971,48 +1040,52 @@ function Visualizer({ onNavigateAdmin }) {
         </section>
       )}
 
-      {/* 4.5. Current Vector Range Legend */}
+      {/* 4.5. Current Vector Scale Legend */}
       {selectedMember && metadata && showCurrents && (
-        <section className={`absolute bottom-[54px] ${showContours ? 'left-28' : 'left-6'} w-48 bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-3.5 rounded-2xl shadow-2xl z-10 flex flex-col gap-2.5 pointer-events-auto transition-all`}>
+        <section className={`absolute bottom-[54px] ${showContours ? 'left-28' : 'left-6'} bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-3.5 rounded-2xl shadow-2xl z-10 flex flex-col gap-2 pointer-events-auto transition-all`}>
           {/* Legend Title */}
-          <div className="flex items-center justify-between border-b border-slate-850/60 pb-1.5">
-            <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Vector Range</span>
+          <div className="flex items-center justify-between border-b border-slate-850/60 pb-1.5 gap-4">
+            <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Vector Scale</span>
             <span className="text-[9px] font-mono font-bold text-sky-400 bg-sky-950/60 border border-sky-800/50 px-1.5 py-0.5 rounded-md">m/s</span>
           </div>
 
-          {/* Reference Arrow Scale (Decoupled static arrows for max and min) */}
-          <div className="flex flex-col gap-2 py-0.5">
-            {/* Max vector arrow */}
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <svg className="w-20 h-4 overflow-visible" viewBox="0 0 80 16">
-                  <line x1="2" y1="8" x2="68" y2="8" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" />
-                  <polygon points="68,4 75,8 68,12" fill="#38bdf8" />
-                </svg>
+          {/* Reference Arrow (Exact pixel length matching max speed arrow on map) */}
+          {(() => {
+            const legendArrowPixels = Math.max(5, Math.round(autoMaxPixels * Math.pow(2, (viewState?.zoom || 6) - quantizedZoom)));
+            return (
+              <div className="flex items-center justify-between gap-4 py-1">
+                <div className="flex items-center justify-center min-w-[35px]">
+                  <svg 
+                    style={{ width: `${Math.max(legendArrowPixels, 12)}px`, height: '16px' }}
+                    viewBox={`0 0 ${Math.max(legendArrowPixels, 12)} 16`}
+                    className="overflow-visible"
+                  >
+                    <line 
+                      x1="0" 
+                      y1="8" 
+                      x2={Math.max(0, legendArrowPixels - 5)} 
+                      y2="8" 
+                      stroke="#38bdf8" 
+                      strokeWidth="2" 
+                      strokeLinecap="round" 
+                    />
+                    <polygon 
+                      points={`${Math.max(0, legendArrowPixels - 5)},5 ${legendArrowPixels},8 ${Math.max(0, legendArrowPixels - 5)},11`} 
+                      fill="#38bdf8" 
+                    />
+                  </svg>
+                </div>
+                <span className="text-[10px] font-mono text-slate-200 font-medium whitespace-nowrap">
+                  {currentMaxSpeed.toFixed(2)} m/s
+                </span>
               </div>
-              <span className="text-[10px] font-mono text-slate-200 font-medium">
-                {currentMaxSpeed.toFixed(2)} m/s
-              </span>
-            </div>
-
-            {/* Min vector arrow */}
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <svg className="w-20 h-4 overflow-visible" viewBox="0 0 80 16">
-                  <line x1="2" y1="8" x2="18" y2="8" stroke="#0ea5e9" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="3 1" />
-                  <polygon points="18,5 23,8 18,11" fill="#0ea5e9" />
-                </svg>
-              </div>
-              <span className="text-[10px] font-mono text-slate-400">
-                {currentMinSpeed.toFixed(2)} m/s
-              </span>
-            </div>
-          </div>
+            );
+          })()}
         </section>
       )}
 
       {/* 3. Left Sidebar Control Panel Stack */}
-      <div className="absolute top-[96px] left-6 w-96 z-10 flex flex-col gap-4 pointer-events-auto max-h-[calc(100vh-176px)] overflow-y-auto pr-1">
+      <div className="absolute top-[106px] left-6 w-96 z-10 flex flex-col gap-4 pointer-events-auto max-h-[calc(100vh-186px)] overflow-y-auto pr-1">
         
         {/* Model Visualization block */}
         <main className="w-full bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col shrink-0">
@@ -1293,36 +1366,18 @@ function Visualizer({ onNavigateAdmin }) {
             {/* Expandable Settings */}
             {showSettings && (
               <div className="border-t border-slate-900 pt-3 space-y-3 animate-[fadeIn_0.2s_ease-out]">
-                <div className="space-y-1">
-                  <div className="flex justify-between text-[10px] text-slate-400 uppercase">
-                    <span>Current Vector Scale</span>
-                    <span className="font-mono text-sky-400">{vectorScale.toFixed(3)}</span>
+                <div className="space-y-2 text-xs">
+                  <div className="flex justify-between items-center text-[10px] text-slate-400 uppercase">
+                    <span>Max Vector Length</span>
+                    <span className="font-mono text-sky-400 font-bold">{autoMaxPixels} px</span>
                   </div>
-                  <input
-                    type="range"
-                    min="0.005"
-                    max="0.5"
-                    step="0.005"
-                    value={vectorScale}
-                    onChange={(e) => setVectorScale(parseFloat(e.target.value))}
-                    className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <div className="flex justify-between text-[10px] text-slate-400 uppercase">
-                    <span>Downsampling</span>
-                    <span className="font-mono text-emerald-400">1 / {downsampleRate}</span>
+                  <div className="flex justify-between items-center text-[10px] text-slate-400 uppercase">
+                    <span>Downsampling Rate</span>
+                    <span className="font-mono text-emerald-400 font-bold">1 / {autoDownsampleRate}</span>
                   </div>
-                  <input
-                    type="range"
-                    min="2"
-                    max="10"
-                    step="1"
-                    value={downsampleRate}
-                    onChange={(e) => setDownsampleRate(parseInt(e.target.value))}
-                    className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-                  />
+                  <div className="text-[9px] text-slate-500 italic text-center pt-1 border-t border-slate-900">
+                    Scaled dynamically based on zoom level
+                  </div>
                 </div>
               </div>
             )}
@@ -1446,6 +1501,14 @@ function Visualizer({ onNavigateAdmin }) {
           </div>
         </section>
       )}
+
+      {/* 5. Live Zoom Level Indicator (Top Right) */}
+      <div className="absolute top-[106px] right-6 bg-slate-950/85 border border-slate-800/80 backdrop-blur-md px-3.5 py-2 rounded-2xl shadow-xl z-20 pointer-events-auto flex items-center gap-2">
+        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Zoom</span>
+        <span className="text-xs font-mono font-bold text-sky-400 bg-sky-950/60 border border-sky-800/50 px-2 py-0.5 rounded-lg">
+          {viewState?.zoom ? viewState.zoom.toFixed(2) : '5.80'}
+        </span>
+      </div>
 
 
 

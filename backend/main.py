@@ -526,7 +526,9 @@ async def get_currents(
                 "lng": lon_val,
                 "lat": lat_val,
                 "u": u_val,
-                "v": v_val
+                "v": v_val,
+                "i": i,
+                "j": j
             })
             
     return points
