@@ -502,6 +502,36 @@ async def get_contours(
         compute_contours_sync, file_path, variable, time, depth, tolerance, loaded_time, dataset, meta
     )
 
+def compute_currents_sync(dataset, meta, actual_time: int, depth: int, downsample: int = 1):
+    u_slice = dataset['u'].isel(time=actual_time, depth=depth).values
+    v_slice = dataset['v'].isel(time=actual_time, depth=depth).values
+    lon = dataset['lon_rho'].values
+    lat = dataset['lat_rho'].values
+    
+    lon_ds = lon[::downsample, ::downsample]
+    lat_ds = lat[::downsample, ::downsample]
+    u_ds = u_slice[::downsample, ::downsample]
+    v_ds = v_slice[::downsample, ::downsample]
+    
+    rows, cols = lon_ds.shape
+    i_grid, j_grid = np.ogrid[:rows, :cols]
+    i_mat = np.broadcast_to(i_grid, (rows, cols))
+    j_mat = np.broadcast_to(j_grid, (rows, cols))
+
+    valid = ~(np.isnan(lon_ds) | np.isnan(lat_ds) | np.isnan(u_ds) | np.isnan(v_ds))
+
+    lons = lon_ds[valid]
+    lats = lat_ds[valid]
+    us = u_ds[valid]
+    vs = v_ds[valid]
+    is_arr = i_mat[valid]
+    js_arr = j_mat[valid]
+
+    return [
+        [float(lon_val), float(lat_val), float(u_val), float(v_val), int(i_val), int(j_val)]
+        for lon_val, lat_val, u_val, v_val, i_val, j_val in zip(lons, lats, us, vs, is_arr, js_arr)
+    ]
+
 @app.get("/api/currents")
 async def get_currents(
     response: Response,
@@ -523,51 +553,70 @@ async def get_currents(
     if file_path and ('u' not in meta.get('ranges', {}) or 'v' not in meta.get('ranges', {})):
         raise HTTPException(status_code=400, detail="Currents variable is not configured/available for this variable group.")
         
-    # Bounds check
     if time < 0 or time >= len(meta['times']):
         raise HTTPException(status_code=400, detail=f"Time index must be between 0 and {len(meta['times'])-1}")
         
     if depth < 0 or depth >= len(meta['depths']):
         raise HTTPException(status_code=400, detail=f"Depth index must be between 0 and {len(meta['depths'])-1}")
 
-    # Map frontend time index to raw time index using cached time_sampling
     time_sampling = meta.get("time_sampling", 1)
     actual_time = time * time_sampling
 
-    # Extract u and v components
-    u_slice = dataset['u'].isel(time=actual_time, depth=depth).values
-    v_slice = dataset['v'].isel(time=actual_time, depth=depth).values
-    lon = dataset['lon_rho'].values
-    lat = dataset['lat_rho'].values
-    
-    # Downsample using slicing
-    lon_ds = lon[::downsample, ::downsample]
-    lat_ds = lat[::downsample, ::downsample]
-    u_ds = u_slice[::downsample, ::downsample]
-    v_ds = v_slice[::downsample, ::downsample]
-    
-    # Create grid coordinate indices i, j
-    rows, cols = lon_ds.shape
-    i_grid, j_grid = np.ogrid[:rows, :cols]
-    i_mat = np.broadcast_to(i_grid, (rows, cols))
-    j_mat = np.broadcast_to(j_grid, (rows, cols))
+    return compute_currents_sync(dataset, meta, actual_time, depth, downsample)
 
-    # Vectorized valid mask (filter out NaNs/land points)
-    valid = ~(np.isnan(lon_ds) | np.isnan(lat_ds) | np.isnan(u_ds) | np.isnan(v_ds))
+@app.get("/api/frame")
+async def get_frame(
+    response: Response,
+    variable: str = Query("temp", description="Variable: temp, salt, zeta"),
+    time: int = Query(..., description="Time index (0-239)"),
+    depth: int = Query(0, description="Depth index (0-6)"),
+    tolerance: float = Query(0.001, description="Shapely simplification tolerance in degrees"),
+    file_path: Optional[str] = Query(None, description="Path to specific NetCDF file"),
+    include_contours: bool = Query(True),
+    include_currents: bool = Query(True)
+):
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    loaded_time = 0.0
+    if file_path:
+        dataset, meta = await get_cached_dataset(file_path)
+        if file_path in dataset_cache:
+            loaded_time = dataset_cache[file_path][2]
+    else:
+        dataset = ds
+        meta = metadata_cache
+        
+    if dataset is None:
+        raise HTTPException(status_code=503, detail="Dataset not loaded")
 
-    # Extract 1D arrays of valid points
-    lons = lon_ds[valid]
-    lats = lat_ds[valid]
-    us = u_ds[valid]
-    vs = v_ds[valid]
-    is_arr = i_mat[valid]
-    js_arr = j_mat[valid]
+    if time < 0 or time >= len(meta['times']):
+        raise HTTPException(status_code=400, detail=f"Time index must be between 0 and {len(meta['times'])-1}")
+        
+    if variable != 'zeta' and (depth < 0 or depth >= len(meta['depths'])):
+        raise HTTPException(status_code=400, detail=f"Depth index must be between 0 and {len(meta['depths'])-1}")
 
-    # Combine into list of compact numeric tuples: [lng, lat, u, v, i, j]
-    return [
-        [float(lon_val), float(lat_val), float(u_val), float(v_val), int(i_val), int(j_val)]
-        for lon_val, lat_val, u_val, v_val, i_val, j_val in zip(lons, lats, us, vs, is_arr, js_arr)
-    ]
+    time_sampling = meta.get("time_sampling", 1)
+    actual_time = time * time_sampling
+
+    result = {}
+
+    has_contours = variable in meta.get('ranges', {})
+    has_currents = 'u' in meta.get('ranges', {}) and 'v' in meta.get('ranges', {})
+
+    if include_contours and has_contours:
+        contours = await asyncio.to_thread(
+            compute_contours_sync, file_path, variable, time, depth, tolerance, loaded_time, dataset, meta
+        )
+        result["contours"] = contours
+    else:
+        result["contours"] = None
+
+    if include_currents and has_currents:
+        currents = compute_currents_sync(dataset, meta, actual_time, depth, 1)
+        result["currents"] = currents
+    else:
+        result["currents"] = None
+
+    return result
 
 
 @app.get("/api/points")

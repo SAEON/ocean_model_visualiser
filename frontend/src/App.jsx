@@ -415,43 +415,49 @@ function Visualizer({ onNavigateAdmin }) {
     handleSelectVariableGroup(firstGroup, member);
   };
 
-  // Independent Fetch Helpers for Contours and Currents
-  const fetchContourData = async (filePath, variable, depth, time, tolerance) => {
-    const key = `${filePath}_${variable}_${depth}_${time}_tol${tolerance}`;
+  const fetchingFrameKeysRef = useRef(new Set());
+
+  const fetchFrameData = async (filePath, variable, depth, time, tolerance, needContours, needCurrents, signal) => {
+    const contourKey = `${filePath}_${variable}_${depth}_${time}_tol${tolerance}`;
+    const currentsKey = `${filePath}_${depth}_${time}`;
+    const requestKey = `${contourKey}__${currentsKey}__c${needContours}_v${needCurrents}`;
+
+    if (fetchingFrameKeysRef.current.has(requestKey)) return;
+    fetchingFrameKeysRef.current.add(requestKey);
+
     try {
-      const contourUrl = `${API_URL}/api/contours?variable=${variable}&time=${time}&depth=${depth}&tolerance=${tolerance}` +
+      const frameUrl = `${API_URL}/api/frame?variable=${variable}&time=${time}&depth=${depth}&tolerance=${tolerance}` +
+        `&include_contours=${needContours}&include_currents=${needCurrents}` +
         (filePath ? `&file_path=${encodeURIComponent(filePath)}` : '');
-      const res = await fetch(contourUrl);
-      const contours = await res.json();
-      setContourCache((prev) => ({ ...prev, [key]: contours }));
+      const res = await fetch(frameUrl, { signal });
+      const data = await res.json();
+
+      if (data.contours) {
+        setContourCache((prev) => ({ ...prev, [contourKey]: data.contours }));
+      }
+      if (data.currents) {
+        const mappedCurrents = data.currents.map((pt) =>
+          Array.isArray(pt)
+            ? { lng: pt[0], lat: pt[1], u: pt[2], v: pt[3], i: pt[4], j: pt[5] }
+            : pt
+        );
+        setCurrentsCache((prev) => ({ ...prev, [currentsKey]: mappedCurrents }));
+      }
     } catch (err) {
-      console.error(`Failed to fetch contour key ${key}:`, err);
+      if (err.name !== 'AbortError') {
+        console.error(`Failed to fetch frame ${requestKey}:`, err);
+      }
+    } finally {
+      fetchingFrameKeysRef.current.delete(requestKey);
     }
   };
 
-  const fetchCurrentsData = async (filePath, depth, time) => {
-    const key = `${filePath}_${depth}_${time}`;
-    try {
-      const currentsUrl = `${API_URL}/api/currents?time=${time}&depth=${depth}&downsample=1` +
-        (filePath ? `&file_path=${encodeURIComponent(filePath)}` : '');
-      const res = await fetch(currentsUrl);
-      const rawCurrents = await res.json();
-      const currents = rawCurrents.map((pt) => 
-        Array.isArray(pt) 
-          ? { lng: pt[0], lat: pt[1], u: pt[2], v: pt[3], i: pt[4], j: pt[5] } 
-          : pt
-      );
-      setCurrentsCache((prev) => ({ ...prev, [key]: currents }));
-    } catch (err) {
-      console.error(`Failed to fetch currents key ${key}:`, err);
-    }
-  };
-
-  // Independent Pre-fetching and sliding-window cache logic
+  // Coupled Pre-fetching and sliding-window cache logic
   useEffect(() => {
     if (!metadata) return;
 
     let isCancelled = false;
+    const controller = new AbortController();
     const numSteps = metadata.times.length;
     const filePath = selectedGroup?.file_path || '';
 
@@ -461,29 +467,12 @@ function Visualizer({ onNavigateAdmin }) {
       const currentsDepth = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
       const currentsKey = `${filePath}_${currentsDepth}_${timeIdx}`;
 
-      const promises = [];
+      const needContours = showContours && !contourCacheRef.current[contourKey];
+      const needCurrents = showCurrents && !currentsCacheRef.current[currentsKey];
 
-      // Fetch contours independently if enabled & not cached
-      if (showContours && !contourCacheRef.current[contourKey] && !fetchingContourKeysRef.current.has(contourKey)) {
-        fetchingContourKeysRef.current.add(contourKey);
-        promises.push(
-          fetchContourData(filePath, selectedVariable, dIdx, timeIdx, simplification)
-            .finally(() => fetchingContourKeysRef.current.delete(contourKey))
-        );
-      }
+      if (!needContours && !needCurrents) return;
 
-      // Fetch currents independently if enabled & not cached
-      if (showCurrents && !currentsCacheRef.current[currentsKey] && !fetchingCurrentsKeysRef.current.has(currentsKey)) {
-        fetchingCurrentsKeysRef.current.add(currentsKey);
-        promises.push(
-          fetchCurrentsData(filePath, currentsDepth, timeIdx)
-            .finally(() => fetchingCurrentsKeysRef.current.delete(currentsKey))
-        );
-      }
-
-      if (promises.length > 0) {
-        await Promise.allSettled(promises);
-      }
+      await fetchFrameData(filePath, selectedVariable, dIdx, timeIdx, simplification, needContours, needCurrents, controller.signal);
     };
 
     // 1. Load current step (+0) and immediate next step (+1) with high priority
@@ -492,12 +481,12 @@ function Visualizer({ onNavigateAdmin }) {
       ensureData((currentTimeIndex + 1) % numSteps);
     }
 
-    // 2. Sequentially prefetch buffer (+2 to +80) in small controlled batches of 2 steps
+    // 2. Sequentially prefetch buffer (+2 to end of dataset) in small controlled batches of 2 steps
     const runPrefetchLoop = async () => {
       await new Promise((r) => setTimeout(r, 100));
       
-      for (let i = 2; i <= 80; i += 2) {
-        if (isCancelled) break;
+      for (let i = 2; i < numSteps; i += 2) {
+        if (isCancelled || controller.signal.aborted) break;
         const stepA = (currentTimeIndex + i) % numSteps;
         const stepB = (currentTimeIndex + i + 1) % numSteps;
         
@@ -512,6 +501,7 @@ function Visualizer({ onNavigateAdmin }) {
 
     return () => {
       isCancelled = true;
+      controller.abort();
     };
   }, [selectedVariable, currentDepthIndex, currentTimeIndex, simplification, showContours, showCurrents, metadata, selectedGroup]);
 
@@ -557,6 +547,33 @@ function Visualizer({ onNavigateAdmin }) {
     const filePath = selectedGroup?.file_path || '';
     return `${filePath}_${currentsDepth}_${currentTimeIndex}`;
   }, [selectedVariable, currentDepthIndex, currentTimeIndex, selectedGroup]);
+
+  // Calculate consecutive buffered frames from currentTimeIndex
+  const bufferedRange = useMemo(() => {
+    if (!metadata || !selectedGroup) return { count: 0, percentage: 0 };
+    const numSteps = metadata.times.length;
+    const dIdx = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
+    const filePath = selectedGroup?.file_path || '';
+
+    let count = 0;
+    for (let i = 0; i < numSteps; i++) {
+      const idx = (currentTimeIndex + i) % numSteps;
+      const cKey = `${filePath}_${selectedVariable}_${dIdx}_${idx}_tol${simplification}`;
+      const vKey = `${filePath}_${dIdx}_${idx}`;
+      const hasC = !showContours || !!contourCache[cKey];
+      const hasV = !showCurrents || !!currentsCache[vKey];
+
+      if (hasC && hasV) {
+        count++;
+      } else {
+        break;
+      }
+    }
+    return {
+      count,
+      percentage: Math.min(100, (count / Math.max(1, numSteps - 1)) * 100)
+    };
+  }, [metadata, selectedGroup, currentTimeIndex, selectedVariable, currentDepthIndex, simplification, showContours, showCurrents, contourCache, currentsCache]);
 
   const activeContours = selectedGroup && showContours ? contourCache[activeContourKey] : null;
   const activeCurrents = selectedGroup && showCurrents ? currentsCache[activeCurrentsKey] : null;
@@ -1472,19 +1489,36 @@ function Visualizer({ onNavigateAdmin }) {
 
           {/* Timeline Slider & Progress */}
           <div className="flex-1 flex flex-col gap-1">
-            <div className="relative group flex items-center">
+            <div className="relative group flex items-center h-4">
+              {/* Custom Track Background with Glowing Buffer Fill */}
+              <div className="absolute left-0 right-0 h-1.5 bg-slate-900 rounded-lg overflow-hidden pointer-events-none border border-slate-800/80">
+                <div
+                  className="absolute top-0 bottom-0 bg-sky-500/30 border-r border-sky-400/80 rounded-r transition-all duration-300 shadow-[0_0_8px_rgba(56,189,248,0.5)]"
+                  style={{
+                    left: `${(currentTimeIndex / Math.max(1, metadata.times.length - 1)) * 100}%`,
+                    width: `${(bufferedRange.count / Math.max(1, metadata.times.length - 1)) * 100}%`
+                  }}
+                ></div>
+              </div>
+
+              {/* Range Input Overlay */}
               <input
                 type="range"
                 min="0"
                 max={metadata.times.length - 1}
                 value={currentTimeIndex}
                 onChange={(e) => setCurrentTimeIndex(parseInt(e.target.value))}
-                className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
+                className="w-full h-1.5 bg-transparent rounded-lg appearance-none cursor-pointer accent-sky-400 z-10"
               />
             </div>
             <div className="flex items-center justify-between text-[9px] text-slate-500 font-mono leading-none">
               <span>0h</span>
-              <span>Timeline Progress</span>
+              <span className="flex items-center gap-1">
+                <span>Timeline Progress</span>
+                {bufferedRange.count > 0 && (
+                  <span className="text-sky-400 font-bold">({bufferedRange.count}h buffered)</span>
+                )}
+              </span>
               <span>{metadata.times.length - 1}h</span>
             </div>
           </div>
