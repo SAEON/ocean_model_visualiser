@@ -435,7 +435,12 @@ function Visualizer({ onNavigateAdmin }) {
       const currentsUrl = `${API_URL}/api/currents?time=${time}&depth=${depth}&downsample=1` +
         (filePath ? `&file_path=${encodeURIComponent(filePath)}` : '');
       const res = await fetch(currentsUrl);
-      const currents = await res.json();
+      const rawCurrents = await res.json();
+      const currents = rawCurrents.map((pt) => 
+        Array.isArray(pt) 
+          ? { lng: pt[0], lat: pt[1], u: pt[2], v: pt[3], i: pt[4], j: pt[5] } 
+          : pt
+      );
       setCurrentsCache((prev) => ({ ...prev, [key]: currents }));
     } catch (err) {
       console.error(`Failed to fetch currents key ${key}:`, err);
@@ -446,47 +451,68 @@ function Visualizer({ onNavigateAdmin }) {
   useEffect(() => {
     if (!metadata) return;
 
+    let isCancelled = false;
     const numSteps = metadata.times.length;
     const filePath = selectedGroup?.file_path || '';
 
-    const ensureData = (timeIdx) => {
+    const ensureData = async (timeIdx) => {
       const dIdx = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
       const contourKey = `${filePath}_${selectedVariable}_${dIdx}_${timeIdx}_tol${simplification}`;
       const currentsDepth = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
       const currentsKey = `${filePath}_${currentsDepth}_${timeIdx}`;
 
+      const promises = [];
+
       // Fetch contours independently if enabled & not cached
       if (showContours && !contourCacheRef.current[contourKey] && !fetchingContourKeysRef.current.has(contourKey)) {
         fetchingContourKeysRef.current.add(contourKey);
-        fetchContourData(filePath, selectedVariable, dIdx, timeIdx, simplification)
-          .then(() => fetchingContourKeysRef.current.delete(contourKey))
-          .catch(() => fetchingContourKeysRef.current.delete(contourKey));
+        promises.push(
+          fetchContourData(filePath, selectedVariable, dIdx, timeIdx, simplification)
+            .finally(() => fetchingContourKeysRef.current.delete(contourKey))
+        );
       }
 
       // Fetch currents independently if enabled & not cached
       if (showCurrents && !currentsCacheRef.current[currentsKey] && !fetchingCurrentsKeysRef.current.has(currentsKey)) {
         fetchingCurrentsKeysRef.current.add(currentsKey);
-        fetchCurrentsData(filePath, currentsDepth, timeIdx)
-          .then(() => fetchingCurrentsKeysRef.current.delete(currentsKey))
-          .catch(() => fetchingCurrentsKeysRef.current.delete(currentsKey));
+        promises.push(
+          fetchCurrentsData(filePath, currentsDepth, timeIdx)
+            .finally(() => fetchingCurrentsKeysRef.current.delete(currentsKey))
+        );
+      }
+
+      if (promises.length > 0) {
+        await Promise.allSettled(promises);
       }
     };
 
-    // 1. Load current step and immediate next step (+1) instantly
+    // 1. Load current step (+0) and immediate next step (+1) with high priority
     ensureData(currentTimeIndex);
     if (numSteps > 1) {
       ensureData((currentTimeIndex + 1) % numSteps);
     }
 
-    // 2. Debounce prefetching of remaining buffer steps (+2 to +80)
-    const prefetchTimer = setTimeout(() => {
-      for (let i = 2; i <= 80; i++) {
-        const nextIndex = (currentTimeIndex + i) % numSteps;
-        ensureData(nextIndex);
+    // 2. Sequentially prefetch buffer (+2 to +80) in small controlled batches of 2 steps
+    const runPrefetchLoop = async () => {
+      await new Promise((r) => setTimeout(r, 100));
+      
+      for (let i = 2; i <= 80; i += 2) {
+        if (isCancelled) break;
+        const stepA = (currentTimeIndex + i) % numSteps;
+        const stepB = (currentTimeIndex + i + 1) % numSteps;
+        
+        await Promise.allSettled([
+          ensureData(stepA),
+          ensureData(stepB)
+        ]);
       }
-    }, 150);
+    };
 
-    return () => clearTimeout(prefetchTimer);
+    runPrefetchLoop();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [selectedVariable, currentDepthIndex, currentTimeIndex, simplification, showContours, showCurrents, metadata, selectedGroup]);
 
   // Playback Loop
@@ -633,20 +659,20 @@ function Visualizer({ onNavigateAdmin }) {
         new GeoJsonLayer({
           id: 'land-mask',
           data: maskData,
-          operation: 'mask'
+          operation: 'mask',
+          getFillColor: [0, 0, 0, 255]
         })
       );
     }
 
-    // 1. Filled Contour Layer
+    // 1. Contours Layer
     if (showContours && renderedData?.contours && selectedMember) {
       layersList.push(
         new GeoJsonLayer({
-          id: 'contours-layer',
+          id: 'contour-layer',
           data: renderedData.contours,
-          pickable: true,
-          stroked: true,
           filled: true,
+          stroked: true,
           lineWidthScale: 1,
           lineWidthMinPixels: 0.5,
           getFillColor: (f) => {
@@ -1089,13 +1115,6 @@ function Visualizer({ onNavigateAdmin }) {
         
         {/* Model Visualization block */}
         <main className="w-full bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col shrink-0">
-          {/* Loading progress bar */}
-          {isLoading && (
-            <div className="h-[2px] bg-slate-800 w-full overflow-hidden relative">
-              <div className="absolute h-[2px] bg-sky-500 animate-[shimmer_1.5s_infinite] w-1/3"></div>
-            </div>
-          )}
-          {!isLoading && <div className="h-[2px] bg-sky-500/30 w-full"></div>}
 
           <div className="border-b border-slate-900/60 px-5 py-4 flex items-center justify-between bg-slate-950/40">
             <div className="flex items-center gap-2">

@@ -1,10 +1,12 @@
 import os
 import time
+import asyncio
 from typing import Optional
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Query, HTTPException, Depends, status
+from fastapi import FastAPI, Query, HTTPException, Depends, status, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
 import bcrypt
@@ -95,19 +97,10 @@ NETCDF_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "croco_av
 ds = None
 metadata_cache = {}
 dataset_cache = {}
+contour_layer_cache = {}
 
 async def get_cached_dataset(file_path: str):
     now = time.time()
-    if file_path in dataset_cache:
-        dataset, meta, loaded_time = dataset_cache[file_path]
-        if now - loaded_time <= 6 * 3600:  # 6 hours in seconds
-            return dataset, meta
-        else:
-            try:
-                dataset.close()
-            except Exception:
-                pass
-            del dataset_cache[file_path]
 
     resolved_path = file_path
     if not os.path.exists(resolved_path):
@@ -117,7 +110,34 @@ async def get_cached_dataset(file_path: str):
                 resolved_path = fallback
 
     if not os.path.exists(resolved_path):
+        if file_path in dataset_cache:
+            dataset, _, _ = dataset_cache.pop(file_path)
+            try:
+                dataset.close()
+            except Exception:
+                pass
+            # Clear matching contour layer caches
+            keys_to_del = [k for k in contour_layer_cache if k[0] == (file_path or '')]
+            for k in keys_to_del:
+                del contour_layer_cache[k]
         raise HTTPException(status_code=400, detail=f"NetCDF file not found at path: {file_path}")
+
+    mtime = os.path.getmtime(resolved_path)
+
+    if file_path in dataset_cache:
+        dataset, meta, loaded_time = dataset_cache[file_path]
+        if (now - loaded_time <= 6 * 3600) and (mtime <= loaded_time):
+            return dataset, meta
+        else:
+            try:
+                dataset.close()
+            except Exception:
+                pass
+            del dataset_cache[file_path]
+            # Clear matching contour layer caches
+            keys_to_del = [k for k in contour_layer_cache if k[0] == (file_path or '')]
+            for k in keys_to_del:
+                del contour_layer_cache[k]
     try:
         dataset = xr.open_dataset(resolved_path)
         
@@ -188,7 +208,7 @@ async def get_cached_dataset(file_path: str):
             "ranges": var_ranges,
             "time_sampling": time_sampling
         }
-        dataset_cache[file_path] = (dataset, meta, now)
+        dataset_cache[file_path] = (dataset, meta, time.time())
         return dataset, meta
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to open or parse NetCDF at {file_path}. Error: {str(e)}")
@@ -274,7 +294,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Ocean Model Visualizer API", lifespan=lifespan)
 
-# Enable CORS
+# Enable CORS & GZip Compression
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -282,6 +302,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Authentication Endpoints
 @app.post("/api/auth/login", response_model=TokenResponse)
@@ -319,42 +340,14 @@ async def get_metadata(file_path: Optional[str] = None):
         raise HTTPException(status_code=503, detail="Service initializing")
     return metadata_cache
 
-@app.get("/api/contours")
-async def get_contours(
-    variable: str = Query(..., description="Variable: temp, salt, zeta"),
-    time: int = Query(..., description="Time index (0-239)"),
-    depth: int = Query(0, description="Depth index (0-6)"),
-    tolerance: float = Query(0.001, description="Shapely simplification tolerance in degrees"),
-    file_path: Optional[str] = Query(None, description="Path to specific NetCDF file")
-):
-    if file_path:
-        dataset, meta = await get_cached_dataset(file_path)
-    else:
-        dataset = ds
-        meta = metadata_cache
-        
-    if dataset is None:
-        raise HTTPException(status_code=503, detail="Dataset not loaded")
+def compute_contours_sync(file_path: Optional[str], variable: str, time_idx: int, depth: int, tolerance: float, loaded_time: float, dataset, meta):
+    cache_key = (file_path or '', variable, depth, time_idx, tolerance, loaded_time)
+    if cache_key in contour_layer_cache:
+        return contour_layer_cache[cache_key]
 
-    if file_path and variable not in meta.get('ranges', {}):
-        raise HTTPException(status_code=400, detail=f"Variable '{variable}' is not configured/available for this variable group.")
-        
-    if variable not in ['temp', 'salt', 'zeta']:
-        raise HTTPException(status_code=400, detail="Invalid variable. Choose temp, salt, or zeta.")
-        
-    # Bounds check
-    if time < 0 or time >= len(meta['times']):
-        raise HTTPException(status_code=400, detail=f"Time index must be between 0 and {len(meta['times'])-1}")
-        
-    if variable != 'zeta':
-        if depth < 0 or depth >= len(meta['depths']):
-            raise HTTPException(status_code=400, detail=f"Depth index must be between 0 and {len(meta['depths'])-1}")
-
-    # Map frontend time index to raw time index using cached time_sampling
     time_sampling = meta.get("time_sampling", 1)
-    actual_time = time * time_sampling
+    actual_time = time_idx * time_sampling
 
-    # Extract slice
     if variable == 'zeta':
         slice_data = dataset['zeta'].isel(time=actual_time)
     else:
@@ -364,15 +357,18 @@ async def get_contours(
     lon = dataset['lon_rho'].values
     lat = dataset['lat_rho'].values
     
-    # Check if all values are NaN (e.g. invalid slice)
     if np.isnan(z).all():
-        return {"type": "FeatureCollection", "features": []}
+        res = {"type": "FeatureCollection", "features": []}
+        contour_layer_cache[cache_key] = res
+        return res
         
     z_min = float(np.nanmin(z))
     z_max = float(np.nanmax(z))
     
     if z_min == z_max:
-        return {"type": "FeatureCollection", "features": [], "value_min": z_min, "value_max": z_max}
+        res = {"type": "FeatureCollection", "features": [], "value_min": z_min, "value_max": z_max}
+        contour_layer_cache[cache_key] = res
+        return res
         
     p1 = float(np.nanpercentile(z, 1))
     p99 = float(np.nanpercentile(z, 99))
@@ -404,16 +400,13 @@ async def get_contours(
         if not polys:
             continue
             
-        # Sort by area descending so outer shells come first
         polys = sorted(polys, key=lambda p: p.area, reverse=True)
         
-        # Group nested polygons (holes) inside outer shells
         shells = []
         for poly in polys:
             if not poly.is_valid:
                 poly = make_valid(poly)
             
-            # Check if this poly is inside any already identified shell
             inserted = False
             for shell_info in shells:
                 if shell_info['poly'].contains(poly):
@@ -423,7 +416,6 @@ async def get_contours(
             if not inserted:
                 shells.append({'poly': poly, 'holes': []})
                 
-        # Construct final geometries by subtracting holes from shells
         level_polygons = []
         for shell_info in shells:
             geom = shell_info['poly']
@@ -440,7 +432,6 @@ async def get_contours(
         else:
             final_geom = MultiPolygon(level_polygons)
             
-        # Simplify to reduce size
         if tolerance > 0:
             simplified = final_geom.simplify(tolerance, preserve_topology=True)
         else:
@@ -461,20 +452,65 @@ async def get_contours(
         
     plt.close(fig)
     
-    return {
+    res = {
         "type": "FeatureCollection",
         "features": features,
         "value_min": float(p1),
         "value_max": float(p99)
     }
+    contour_layer_cache[cache_key] = res
+    return res
+
+
+@app.get("/api/contours")
+async def get_contours(
+    response: Response,
+    variable: str = Query(..., description="Variable: temp, salt, zeta"),
+    time: int = Query(..., description="Time index (0-239)"),
+    depth: int = Query(0, description="Depth index (0-6)"),
+    tolerance: float = Query(0.001, description="Shapely simplification tolerance in degrees"),
+    file_path: Optional[str] = Query(None, description="Path to specific NetCDF file")
+):
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    loaded_time = 0.0
+    if file_path:
+        dataset, meta = await get_cached_dataset(file_path)
+        if file_path in dataset_cache:
+            loaded_time = dataset_cache[file_path][2]
+    else:
+        dataset = ds
+        meta = metadata_cache
+        
+    if dataset is None:
+        raise HTTPException(status_code=503, detail="Dataset not loaded")
+
+    if file_path and variable not in meta.get('ranges', {}):
+        raise HTTPException(status_code=400, detail=f"Variable '{variable}' is not configured/available for this variable group.")
+        
+    if variable not in ['temp', 'salt', 'zeta']:
+        raise HTTPException(status_code=400, detail="Invalid variable. Choose temp, salt, or zeta.")
+        
+    # Bounds check
+    if time < 0 or time >= len(meta['times']):
+        raise HTTPException(status_code=400, detail=f"Time index must be between 0 and {len(meta['times'])-1}")
+        
+    if variable != 'zeta':
+        if depth < 0 or depth >= len(meta['depths']):
+            raise HTTPException(status_code=400, detail=f"Depth index must be between 0 and {len(meta['depths'])-1}")
+
+    return await asyncio.to_thread(
+        compute_contours_sync, file_path, variable, time, depth, tolerance, loaded_time, dataset, meta
+    )
 
 @app.get("/api/currents")
 async def get_currents(
+    response: Response,
     time: int = Query(..., description="Time index (0-239)"),
     depth: int = Query(0, description="Depth index (0-6)"),
     downsample: int = Query(3, description="Skip interval for downsampling grid"),
     file_path: Optional[str] = Query(None, description="Path to specific NetCDF file")
 ):
+    response.headers["Cache-Control"] = "public, max-age=86400"
     if file_path:
         dataset, meta = await get_cached_dataset(file_path)
     else:
@@ -510,28 +546,28 @@ async def get_currents(
     u_ds = u_slice[::downsample, ::downsample]
     v_ds = v_slice[::downsample, ::downsample]
     
-    points = []
-    for i in range(lon_ds.shape[0]):
-        for j in range(lon_ds.shape[1]):
-            lon_val = float(lon_ds[i, j])
-            lat_val = float(lat_ds[i, j])
-            u_val = float(u_ds[i, j])
-            v_val = float(v_ds[i, j])
-            
-            # Skip points that are NaNs (land points)
-            if np.isnan(lon_val) or np.isnan(lat_val) or np.isnan(u_val) or np.isnan(v_val):
-                continue
-                
-            points.append({
-                "lng": lon_val,
-                "lat": lat_val,
-                "u": u_val,
-                "v": v_val,
-                "i": i,
-                "j": j
-            })
-            
-    return points
+    # Create grid coordinate indices i, j
+    rows, cols = lon_ds.shape
+    i_grid, j_grid = np.ogrid[:rows, :cols]
+    i_mat = np.broadcast_to(i_grid, (rows, cols))
+    j_mat = np.broadcast_to(j_grid, (rows, cols))
+
+    # Vectorized valid mask (filter out NaNs/land points)
+    valid = ~(np.isnan(lon_ds) | np.isnan(lat_ds) | np.isnan(u_ds) | np.isnan(v_ds))
+
+    # Extract 1D arrays of valid points
+    lons = lon_ds[valid]
+    lats = lat_ds[valid]
+    us = u_ds[valid]
+    vs = v_ds[valid]
+    is_arr = i_mat[valid]
+    js_arr = j_mat[valid]
+
+    # Combine into list of compact numeric tuples: [lng, lat, u, v, i, j]
+    return [
+        [float(lon_val), float(lat_val), float(u_val), float(v_val), int(i_val), int(j_val)]
+        for lon_val, lat_val, u_val, v_val, i_val, j_val in zip(lons, lats, us, vs, is_arr, js_arr)
+    ]
 
 
 @app.get("/api/points")
