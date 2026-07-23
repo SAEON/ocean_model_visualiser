@@ -652,14 +652,18 @@ function Visualizer({ onNavigateAdmin }) {
 
   const isLoading = selectedGroup ? ((showContours && !activeContours) || (showCurrents && !activeCurrents)) : false;
 
-  // Double-buffering: hold last rendered data to avoid blinks while loading
+  // Double-buffering: hold last rendered data to avoid blinks while loading within the SAME variable group
   const [renderedData, setRenderedData] = useState(null);
   useEffect(() => {
-    setRenderedData((prev) => ({
-      contours: showContours ? (activeContours || prev?.contours || null) : null,
-      currents: showCurrents ? (activeCurrents || prev?.currents || null) : null,
-    }));
-  }, [activeContours, activeCurrents, showContours, showCurrents]);
+    setRenderedData((prev) => {
+      const isSameGroup = prev?.filePath === selectedGroup?.file_path;
+      return {
+        filePath: selectedGroup?.file_path,
+        contours: showContours ? (activeContours || (isSameGroup ? prev?.contours : null)) : null,
+        currents: showCurrents ? (activeCurrents || (isSameGroup ? prev?.currents : null)) : null,
+      };
+    });
+  }, [activeContours, activeCurrents, showContours, showCurrents, selectedGroup?.file_path]);
 
   // 2D Grid Downsampling in JS (Zero network latency when zooming)
   const displayCurrents = useMemo(() => {

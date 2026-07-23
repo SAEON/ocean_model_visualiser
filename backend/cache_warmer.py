@@ -3,6 +3,7 @@ import sys
 import time
 import json
 import glob
+import hashlib
 import xarray as xr
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor
@@ -11,6 +12,7 @@ matplotlib.use('Agg')
 from matplotlib.figure import Figure
 from shapely.geometry import Polygon, MultiPolygon, mapping
 from shapely.validation import make_valid
+from pymongo import MongoClient
 
 # Set process low priority if on POSIX
 try:
@@ -19,6 +21,13 @@ except Exception:
     pass
 
 MANIFEST_PATH = os.path.join(os.getcwd(), ".cache", "cache_manifest.json")
+MONGODB_URL = os.environ.get("MONGODB_URL", "mongodb://localhost:27017")
+
+def get_file_cache_prefix(file_path: str) -> str:
+    norm_path = os.path.normpath(file_path or 'default')
+    path_hash = hashlib.md5(norm_path.encode('utf-8')).hexdigest()[:8]
+    base_name = os.path.basename(norm_path)
+    return f"{base_name}_{path_hash}"
 
 def get_cache_manifest():
     if os.path.exists(MANIFEST_PATH):
@@ -39,7 +48,7 @@ def update_cache_manifest(file_path: str, mtime: float):
     os.replace(tmp_path, MANIFEST_PATH)
 
 def purge_stale_cache(file_path: str):
-    file_basename = os.path.basename(file_path or 'default')
+    file_prefix = get_file_cache_prefix(file_path)
     cache_dirs = [
         os.path.join(os.getcwd(), ".cache", "contours"),
         os.path.join(os.getcwd(), ".cache", "currents")
@@ -47,7 +56,7 @@ def purge_stale_cache(file_path: str):
     purged_count = 0
     for cdir in cache_dirs:
         if os.path.exists(cdir):
-            pattern = os.path.join(cdir, f"{file_basename}_*")
+            pattern = os.path.join(cdir, f"{file_prefix}_*")
             for fpath in glob.glob(pattern):
                 try:
                     os.remove(fpath)
@@ -55,14 +64,14 @@ def purge_stale_cache(file_path: str):
                 except Exception:
                     pass
     if purged_count > 0:
-        print(f"[Cache Warmer] Purged {purged_count} stale cache files for {file_basename}")
+        print(f"[Cache Warmer] Purged {purged_count} stale cache files for {os.path.basename(file_path)}")
 
 def compute_single_contour_frame(args):
     file_path, variable, time_idx, depth, tolerance, loaded_time = args
     cache_dir = os.path.join(os.getcwd(), ".cache", "contours")
     os.makedirs(cache_dir, exist_ok=True)
-    file_basename = os.path.basename(file_path or 'default')
-    cache_filename = f"{file_basename}_{variable}_{depth}_{time_idx}_tol{tolerance}.json"
+    file_prefix = get_file_cache_prefix(file_path)
+    cache_filename = f"{file_prefix}_{variable}_{depth}_{time_idx}_tol{tolerance}.json"
     disk_cache_path = os.path.join(cache_dir, cache_filename)
 
     if os.path.exists(disk_cache_path):
@@ -183,8 +192,8 @@ def compute_single_current_frame(args):
     file_path, time_idx, depth, loaded_time, downsample = args
     cache_dir = os.path.join(os.getcwd(), ".cache", "currents")
     os.makedirs(cache_dir, exist_ok=True)
-    file_basename = os.path.basename(file_path or 'default')
-    cache_filename = f"{file_basename}_curr_d{depth}_t{time_idx}_ds{downsample}.json"
+    file_prefix = get_file_cache_prefix(file_path)
+    cache_filename = f"{file_prefix}_curr_d{depth}_t{time_idx}_ds{downsample}.json"
     disk_cache_path = os.path.join(cache_dir, cache_filename)
 
     if os.path.exists(disk_cache_path):
@@ -284,10 +293,6 @@ def warm_dataset(file_path: str, max_workers: int = None):
     t1 = time.time()
     print(f"[Cache Warmer] Completed pre-computation for {os.path.basename(file_path)} in {(t1-t0):.1f} seconds.")
 
-from pymongo import MongoClient
-
-MONGODB_URL = os.environ.get("MONGODB_URL", "mongodb://localhost:27017")
-
 def get_mongodb_file_paths():
     file_paths = set()
     try:
@@ -311,7 +316,7 @@ def get_mongodb_file_paths():
         print(f"[Cache Warmer] MongoDB discovery note: {e}")
     return sorted(list(file_paths))
 
-def purge_orphan_caches(active_basenames: set):
+def purge_orphan_caches(active_prefixes: set):
     cache_dirs = [
         os.path.join(os.getcwd(), ".cache", "contours"),
         os.path.join(os.getcwd(), ".cache", "currents")
@@ -324,8 +329,8 @@ def purge_orphan_caches(active_basenames: set):
                 if not os.path.isfile(fpath):
                     continue
                 matched = False
-                for active_base in active_basenames:
-                    if fname.startswith(f"{active_base}_"):
+                for active_prefix in active_prefixes:
+                    if fname.startswith(f"{active_prefix}_"):
                         matched = True
                         break
                 if not matched:
@@ -338,16 +343,13 @@ def purge_orphan_caches(active_basenames: set):
         print(f"[Cache Warmer] Purged {purged_count} orphan cache files not listed in MongoDB.")
 
 def warm_all_datasets():
-    # 1. Discover dataset files STRICTLY from MongoDB product member variable groups
     db_file_paths = get_mongodb_file_paths()
     if not db_file_paths:
         print("[Cache Warmer] No NetCDF dataset file_paths found in MongoDB member variable_groups.")
         return
 
-    active_basenames = {os.path.basename(f) for f in db_file_paths}
-
-    # 2. Purge orphan cache files for datasets NOT listed in MongoDB
-    purge_orphan_caches(active_basenames)
+    active_prefixes = {get_file_cache_prefix(f) for f in db_file_paths}
+    purge_orphan_caches(active_prefixes)
 
     print(f"[Cache Warmer] Pre-computing cache strictly for {len(db_file_paths)} MongoDB dataset entries: {[os.path.basename(f) for f in db_file_paths]}")
     for file_path in db_file_paths:

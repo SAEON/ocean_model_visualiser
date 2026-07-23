@@ -2,7 +2,14 @@ import os
 import time
 import json
 import asyncio
+import hashlib
 from typing import Optional
+
+def get_file_cache_prefix(file_path: str) -> str:
+    norm_path = os.path.normpath(file_path or 'default')
+    path_hash = hashlib.md5(norm_path.encode('utf-8')).hexdigest()[:8]
+    base_name = os.path.basename(norm_path)
+    return f"{base_name}_{path_hash}"
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Query, HTTPException, Depends, status, Response
@@ -375,8 +382,8 @@ def compute_contours_sync(file_path: Optional[str], variable: str, time_idx: int
     # Persistent Disk Cache Check
     cache_dir = os.path.join(os.getcwd(), ".cache", "contours")
     os.makedirs(cache_dir, exist_ok=True)
-    file_basename = os.path.basename(file_path or 'default')
-    cache_filename = f"{file_basename}_{variable}_{depth}_{time_idx}_tol{tolerance}.json"
+    file_prefix = get_file_cache_prefix(file_path)
+    cache_filename = f"{file_prefix}_{variable}_{depth}_{time_idx}_tol{tolerance}.json"
     disk_cache_path = os.path.join(cache_dir, cache_filename)
 
     if os.path.exists(disk_cache_path):
@@ -567,8 +574,8 @@ def compute_currents_sync(file_path: Optional[str], dataset, meta, time_idx: int
     # Persistent Disk Cache Check
     cache_dir = os.path.join(os.getcwd(), ".cache", "currents")
     os.makedirs(cache_dir, exist_ok=True)
-    file_basename = os.path.basename(file_path or 'default')
-    cache_filename = f"{file_basename}_curr_d{depth}_t{time_idx}_ds{downsample}.json"
+    file_prefix = get_file_cache_prefix(file_path)
+    cache_filename = f"{file_prefix}_curr_d{depth}_t{time_idx}_ds{downsample}.json"
     disk_cache_path = os.path.join(cache_dir, cache_filename)
 
     if os.path.exists(disk_cache_path):
