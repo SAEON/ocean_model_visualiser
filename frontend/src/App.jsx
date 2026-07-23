@@ -4,7 +4,7 @@ import { GeoJsonLayer, PathLayer, ScatterplotLayer } from '@deck.gl/layers';
 import { MaskExtension } from '@deck.gl/extensions';
 import Map from 'react-map-gl/maplibre';
 import maplibregl from 'maplibre-gl';
-import { Play, Pause, SkipForward, SkipBack, Settings, Compass, Waves, Layers, Thermometer, Droplets, ArrowRight, ArrowLeft, Loader2, Activity, MapPin, X, ExternalLink } from 'lucide-react';
+import { Play, Pause, SkipForward, SkipBack, Settings, Compass, Waves, Layers, Thermometer, Droplets, ArrowRight, ArrowLeft, Loader2, Activity, MapPin, X, ExternalLink, SlidersHorizontal, ChevronUp, ChevronDown } from 'lucide-react';
 import Admin from './Admin';
 
 import { API_URL } from './config';
@@ -145,11 +145,12 @@ function Visualizer({ onNavigateAdmin }) {
   const [showCurrents, setShowCurrents] = useState(true);
   const [showContours, setShowContours] = useState(true);
 
-  // Customization States
+  // Customization & Responsive States
   const [targetMaxPixels, setTargetMaxPixels] = useState(40);
   const [downsampleRate, setDownsampleRate] = useState(3);
   const [simplification, setSimplification] = useState(0.001);
-  const [showSettings, setShowSettings] = useState(false);
+  const [isPanelOpen, setIsPanelOpen] = useState(true);
+  const [isDepthOpen, setIsDepthOpen] = useState(false);
 
   // Grid Points & Time Series States
   const [showPoints, setShowPoints] = useState(false);
@@ -1053,10 +1054,10 @@ function Visualizer({ onNavigateAdmin }) {
       </DeckGL>
 
       {/* 2. Top Header Title (Full-Width Header) */}
-      <header className="absolute top-0 left-0 right-0 h-20 bg-slate-950/90 border-b border-slate-800/80 backdrop-blur-md shadow-lg z-20 flex items-center justify-between px-6 pointer-events-auto gap-4">
+      <header className="absolute top-0 left-0 right-0 h-16 sm:h-20 bg-slate-950/90 border-b border-slate-800/80 backdrop-blur-md shadow-lg z-20 flex items-center justify-between px-3 sm:px-6 pointer-events-auto gap-2 sm:gap-4">
         {/* Left: Clickable Logos & Title */}
-        <div className="flex items-center gap-4 shrink-0">
-          <div className="flex items-center gap-3 py-1">
+        <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 py-1">
             <a
               href="https://www.saeon.ac.za/"
               target="_blank"
@@ -1064,7 +1065,7 @@ function Visualizer({ onNavigateAdmin }) {
               className="hover:opacity-80 transition-opacity"
               title="Visit NRF SAEON Website"
             >
-              <img src={`${import.meta.env.BASE_URL}saeon-logo.png`} alt="SAEON Logo" className="h-8 w-auto object-contain" />
+              <img src={`${import.meta.env.BASE_URL}saeon-logo.png`} alt="SAEON Logo" className="h-6 sm:h-8 w-auto object-contain" />
             </a>
             <a
               href="https://somisana.ac.za/"
@@ -1073,19 +1074,19 @@ function Visualizer({ onNavigateAdmin }) {
               className="hover:opacity-80 transition-opacity"
               title="Visit SOMISANA Website"
             >
-              <img src={`${import.meta.env.BASE_URL}somisana-logo.png`} alt="SOMISANA Logo" className="h-8 w-auto object-contain" />
+              <img src={`${import.meta.env.BASE_URL}somisana-logo.png`} alt="SOMISANA Logo" className="h-6 sm:h-8 w-auto object-contain" />
             </a>
           </div>
-          <div className="h-6 w-[1px] bg-slate-800/80 hidden sm:block"></div>
+          <div className="h-5 sm:h-6 w-[1px] bg-slate-800/80 hidden sm:block"></div>
           <div>
-            <h1 className="font-bold text-base text-slate-100 tracking-tight font-outfit">
+            <h1 className="font-bold text-xs sm:text-base text-slate-100 tracking-tight font-outfit truncate max-w-[120px] sm:max-w-none">
               Ocean Model Visualiser
             </h1>
           </div>
         </div>
 
         {/* Center: Active Model & Region status text */}
-        <div className="flex-1 flex justify-center items-center px-4 text-center">
+        <div className="hidden lg:flex flex-1 justify-center items-center px-4 text-center">
           <p className="text-xs text-slate-300 font-medium bg-slate-900/80 border border-slate-800/80 px-4 py-1.5 rounded-full shadow-inner truncate max-w-xl">
             {selectedMember
               ? `Active Model: ${selectedMember.name} (Region: ${clickedProduct?.name || 'Unknown'})`
@@ -1096,24 +1097,24 @@ function Visualizer({ onNavigateAdmin }) {
         </div>
 
         {/* Right: Access Data link button */}
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           <a
             href="https://catalog.somisana.ac.za/"
             target="_blank"
             rel="noopener noreferrer"
-            className="px-3.5 py-2 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/40 hover:border-sky-400 text-xs font-bold uppercase tracking-wider rounded-xl transition-all shadow-md flex items-center gap-1.5 group"
+            className="px-2.5 py-1.5 sm:px-3.5 sm:py-2 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/40 hover:border-sky-400 text-[10px] sm:text-xs font-bold uppercase tracking-wider rounded-xl transition-all shadow-md flex items-center gap-1 sm:gap-1.5 group"
             title="Access SOMISANA Data Catalog"
           >
             <span>Access Data</span>
-            <ExternalLink className="w-3.5 h-3.5 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+            <ExternalLink className="w-3 h-3 sm:w-3.5 sm:h-3.5 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
           </a>
         </div>
       </header>
 
       {/* 2.1. Top Banner Loading Bar */}
       {(isLoading || loadingMembers || loadingPoints || loadingTimeSeries) && (
-        <div className="absolute top-20 left-0 right-0 h-5 bg-slate-950/95 border-b border-sky-500/30 backdrop-blur-md z-20 flex items-center px-6 gap-3 shadow-lg transition-all">
-          <span className="text-[9px] font-mono font-bold text-sky-400 uppercase tracking-widest shrink-0">
+        <div className="absolute top-16 sm:top-20 left-0 right-0 h-4 sm:h-5 bg-slate-950/95 border-b border-sky-500/30 backdrop-blur-md z-20 flex items-center px-3 sm:px-6 gap-2 sm:gap-3 shadow-lg transition-all">
+          <span className="text-[8px] sm:text-[9px] font-mono font-bold text-sky-400 uppercase tracking-widest shrink-0">
             loading:
           </span>
           <div className="flex-1 h-1 bg-slate-900 rounded-full overflow-hidden relative border border-slate-800/80">
@@ -1122,24 +1123,24 @@ function Visualizer({ onNavigateAdmin }) {
         </div>
       )}
       {selectedMember && metadata && showContours && (
-        <section className="absolute bottom-[54px] left-6 w-20 h-76 bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-3.5 rounded-2xl shadow-2xl z-10 flex flex-col items-center justify-between pointer-events-auto">
+        <section className="absolute bottom-[135px] sm:bottom-[54px] left-3 sm:left-6 w-16 sm:w-20 h-64 sm:h-76 bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-2.5 sm:p-3.5 rounded-2xl shadow-2xl z-10 flex flex-col items-center justify-between pointer-events-auto">
           {/* Label at the top */}
           <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider text-center truncate max-w-full pb-1 border-b border-slate-900 w-full">
             {selectedVariable === 'temp' ? 'Temp' : selectedVariable === 'salt' ? 'Salt' : 'SSH'}
           </div>
 
           {/* Ramp Container */}
-          <div className="flex-1 w-full flex justify-center gap-2.5 my-2.5">
+          <div className="flex-1 w-full flex justify-center gap-2 sm:gap-2.5 my-2">
             {/* Color bar */}
             <div
-              className="w-2.5 h-full rounded-md shadow-inner"
+              className="w-2 sm:w-2.5 h-full rounded-md shadow-inner"
               style={{
                 background: `linear-gradient(to top, ${stops.map(s => `rgb(${s.color.slice(0, 3).join(',')})`).join(', ')})`
               }}
             ></div>
 
             {/* 5 Values */}
-            <div className="flex flex-col justify-between text-[9px] font-mono text-slate-400 h-full text-left py-0.5">
+            <div className="flex flex-col justify-between text-[8px] sm:text-[9px] font-mono text-slate-400 h-full text-left py-0.5">
               {legendValues.map((val, i) => (
                 <span
                   key={i}
@@ -1166,40 +1167,40 @@ function Visualizer({ onNavigateAdmin }) {
 
       {/* 4.5. Current Vector Scale Legend */}
       {selectedMember && metadata && showCurrents && (
-        <section className={`absolute bottom-[54px] ${showContours ? 'left-28' : 'left-6'} bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-3.5 rounded-2xl shadow-2xl z-10 flex flex-col gap-2 pointer-events-auto transition-all`}>
+        <section className={`absolute bottom-[135px] sm:bottom-[54px] ${showContours ? 'left-22 sm:left-28' : 'left-3 sm:left-6'} bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-2.5 sm:p-3.5 rounded-2xl shadow-2xl z-10 flex flex-col gap-1.5 sm:gap-2 pointer-events-auto transition-all`}>
           {/* Legend Title */}
-          <div className="flex items-center justify-between border-b border-slate-850/60 pb-1.5 gap-4">
-            <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Vector Scale</span>
-            <span className="text-[9px] font-mono font-bold text-sky-400 bg-sky-950/60 border border-sky-800/50 px-1.5 py-0.5 rounded-md">m/s</span>
+          <div className="flex items-center justify-between border-b border-slate-850/60 pb-1 gap-2 sm:gap-4">
+            <span className="text-[9px] sm:text-[10px] font-bold text-slate-300 uppercase tracking-wider">Vector Scale</span>
+            <span className="text-[8px] sm:text-[9px] font-mono font-bold text-sky-400 bg-sky-950/60 border border-sky-800/50 px-1 py-0.5 rounded-md">m/s</span>
           </div>
 
-          {/* Reference Arrow (Exact pixel length matching max speed arrow on map) */}
+          {/* Reference Arrow */}
           {(() => {
             const legendArrowPixels = Math.max(5, Math.round(autoMaxPixels * Math.pow(2, (viewState?.zoom || 6) - quantizedZoom)));
             return (
-              <div className="flex items-center justify-between gap-4 py-1">
-                <div className="flex items-center justify-center min-w-[35px]">
+              <div className="flex items-center justify-between gap-2 sm:gap-4 py-0.5 sm:py-1">
+                <div className="flex items-center justify-center min-w-[30px] sm:min-w-[35px]">
                   <svg
-                    style={{ width: `${Math.max(legendArrowPixels, 12)}px`, height: '16px' }}
-                    viewBox={`0 0 ${Math.max(legendArrowPixels, 12)} 16`}
+                    style={{ width: `${Math.max(legendArrowPixels, 12)}px`, height: '14px' }}
+                    viewBox={`0 0 ${Math.max(legendArrowPixels, 12)} 14`}
                     className="overflow-visible"
                   >
                     <line
                       x1="0"
-                      y1="8"
+                      y1="7"
                       x2={Math.max(0, legendArrowPixels - 5)}
-                      y2="8"
+                      y2="7"
                       stroke="#38bdf8"
                       strokeWidth="2"
                       strokeLinecap="round"
                     />
                     <polygon
-                      points={`${Math.max(0, legendArrowPixels - 5)},5 ${legendArrowPixels},8 ${Math.max(0, legendArrowPixels - 5)},11`}
+                      points={`${Math.max(0, legendArrowPixels - 5)},4 ${legendArrowPixels},7 ${Math.max(0, legendArrowPixels - 5)},10`}
                       fill="#38bdf8"
                     />
                   </svg>
                 </div>
-                <span className="text-[10px] font-mono text-slate-200 font-medium whitespace-nowrap">
+                <span className="text-[9px] sm:text-[10px] font-mono text-slate-200 font-medium whitespace-nowrap">
                   {currentMaxSpeed.toFixed(2)} m/s
                 </span>
               </div>
@@ -1209,7 +1210,19 @@ function Visualizer({ onNavigateAdmin }) {
       )}
 
       {/* 3. Left Sidebar Control Panel Stack */}
-      <div className="absolute top-[106px] left-6 w-96 z-10 flex flex-col gap-4 pointer-events-auto max-h-[calc(100vh-186px)] overflow-y-auto pr-1">
+      <div className={`absolute top-[72px] sm:top-[106px] left-3 sm:left-6 w-[calc(100vw-24px)] sm:w-96 z-20 flex flex-col gap-2 sm:gap-4 pointer-events-auto transition-all duration-300 ${isPanelOpen ? 'max-h-[calc(100vh-220px)] sm:max-h-[calc(100vh-186px)] overflow-y-auto pr-1' : 'max-h-12 overflow-hidden'}`}>
+        
+        {/* Mobile Collapse Toggle Bar (Visible on mobile) */}
+        <button
+          onClick={() => setIsPanelOpen(!isPanelOpen)}
+          className="sm:hidden w-full bg-slate-950/90 border border-slate-800/80 backdrop-blur-lg px-4 py-2.5 rounded-2xl flex items-center justify-between text-xs font-bold text-slate-200 shadow-xl shrink-0"
+        >
+          <div className="flex items-center gap-2">
+            <SlidersHorizontal className="w-4 h-4 text-sky-400" />
+            <span>Control Panel</span>
+          </div>
+          {isPanelOpen ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+        </button>
 
         {/* Model Visualization block */}
         <main className="w-full bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col shrink-0">
@@ -1462,48 +1475,24 @@ function Visualizer({ onNavigateAdmin }) {
               </div>
             </div>
 
-            {/* Toggle Settings Button */}
-            <div className="border-t border-slate-900 pt-3">
-              <button
-                onClick={() => setShowSettings(!showSettings)}
-                className={`flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider transition-all ${showSettings ? 'text-sky-400' : 'text-slate-400 hover:text-slate-300'
-                  }`}
-              >
-                <Settings className={`w-3.5 h-3.5 ${showSettings ? 'animate-[spin_8s_linear_infinite]' : ''}`} /> Configure Engine
-              </button>
-            </div>
-
-            {/* Expandable Settings */}
-            {showSettings && (
-              <div className="border-t border-slate-900 pt-3 space-y-3 animate-[fadeIn_0.2s_ease-out]">
-                <div className="space-y-2 text-xs">
-                  <div className="flex justify-between items-center text-[10px] text-slate-400 uppercase">
-                    <span>Max Vector Length</span>
-                    <span className="font-mono text-sky-400 font-bold">{autoMaxPixels} px</span>
-                  </div>
-                  <div className="flex justify-between items-center text-[10px] text-slate-400 uppercase">
-                    <span>Downsampling Rate</span>
-                    <span className="font-mono text-emerald-400 font-bold">1 / {autoDownsampleRate}</span>
-                  </div>
-                  <div className="text-[9px] text-slate-500 italic text-center pt-1 border-t border-slate-900">
-                    Scaled dynamically based on zoom level
-                  </div>
-                </div>
-              </div>
-            )}
           </section>
         )}
       </div>
 
       {/* 4b. Depths vertically on the right */}
       {selectedMember && metadata && (
-        <section className="absolute right-6 bottom-[54px] bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-3 rounded-2xl shadow-2xl z-10 flex flex-col items-center gap-2 pointer-events-auto">
-          <div
-            className="text-[9px] font-bold text-slate-500 uppercase tracking-wider text-center pb-1 border-b border-slate-900 w-full"
+        <section className="absolute right-3 sm:right-6 bottom-[135px] sm:bottom-[54px] bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-2 sm:p-3 rounded-2xl shadow-2xl z-10 flex flex-col items-center gap-1.5 sm:gap-2 pointer-events-auto transition-all">
+          <button
+            onClick={() => setIsDepthOpen(!isDepthOpen)}
+            className="w-full flex items-center justify-between gap-1.5 text-[8px] sm:text-[9px] font-bold text-slate-400 uppercase tracking-wider text-center pb-1 border-b border-slate-900 focus:outline-none"
           >
-            Depth
-          </div>
-          <div className="flex flex-col gap-1.5 mt-1">
+            <span>Depth ({metadata.depths[currentDepthIndex] === 0 ? '0m' : `${Math.abs(metadata.depths[currentDepthIndex])}m`})</span>
+            <span className="sm:hidden">
+              {isDepthOpen ? <ChevronDown className="w-3 h-3 text-sky-400" /> : <ChevronUp className="w-3 h-3 text-slate-400" />}
+            </span>
+          </button>
+
+          <div className={`flex flex-col gap-1 sm:gap-1.5 mt-0.5 sm:mt-1 max-h-48 sm:max-h-none overflow-y-auto pr-0.5 transition-all duration-200 ${isDepthOpen ? 'flex' : 'hidden sm:flex'}`}>
             {metadata.depths.map((d, idx) => {
               const isZeta = selectedVariable === 'zeta';
               const isSelected = isZeta ? idx === 0 : currentDepthIndex === idx;
@@ -1511,8 +1500,11 @@ function Visualizer({ onNavigateAdmin }) {
                 <button
                   key={d}
                   disabled={isZeta}
-                  onClick={() => setCurrentDepthIndex(idx)}
-                  className={`w-12 py-2 rounded-xl text-[11px] font-bold border transition-all ${isSelected
+                  onClick={() => {
+                    setCurrentDepthIndex(idx);
+                    setIsDepthOpen(false);
+                  }}
+                  className={`w-9 sm:w-12 py-1.5 sm:py-2 rounded-xl text-[10px] sm:text-[11px] font-bold border transition-all ${isSelected
                     ? 'bg-sky-500/10 text-sky-400 border-sky-500/50'
                     : 'bg-slate-900/40 text-slate-400 border-slate-800'
                     } ${isZeta
@@ -1531,37 +1523,36 @@ function Visualizer({ onNavigateAdmin }) {
 
       {/* 4c. Time playback options across the bottom */}
       {selectedMember && metadata && (
-        <section className="absolute bottom-[54px] left-1/2 -translate-x-1/2 bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg px-6 py-3 rounded-2xl shadow-2xl z-10 flex items-center gap-6 pointer-events-auto w-[960px] max-w-[calc(100vw-32px)]">
+        <section className="absolute bottom-2 sm:bottom-[54px] left-2 sm:left-1/2 right-2 sm:right-auto sm:-translate-x-1/2 bg-slate-950/90 border border-slate-800/80 backdrop-blur-lg px-3 py-2 sm:px-6 sm:py-3 rounded-2xl shadow-2xl z-10 flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 sm:gap-6 pointer-events-auto w-auto sm:w-[960px] max-w-[calc(100vw-16px)] sm:max-w-[calc(100vw-32px)]">
           {/* Play/Pause Button Group */}
-          <div className="flex items-center gap-1 bg-slate-900/60 p-0.5 rounded-xl border border-slate-800/40 shrink-0">
+          <div className="flex items-center gap-0.5 sm:gap-1 bg-slate-900/60 p-0.5 rounded-xl border border-slate-800/40 shrink-0">
             <button
               onClick={() => setCurrentTimeIndex((prev) => (prev - 1 + metadata.times.length) % metadata.times.length)}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition-colors"
+              className="p-1 sm:p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition-colors"
               title="Previous Step"
             >
-              <SkipBack className="w-4 h-4" />
+              <SkipBack className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </button>
             <button
               onClick={() => setIsPlaying(!isPlaying)}
-              className={`p-2 rounded-xl transition-all ${isPlaying ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/20' : 'text-slate-300 hover:bg-slate-800/50'
+              className={`p-1.5 sm:p-2 rounded-xl transition-all ${isPlaying ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/20' : 'text-slate-300 hover:bg-slate-800/50'
                 }`}
               title={isPlaying ? 'Pause' : 'Play'}
             >
-              {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+              {isPlaying ? <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> : <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
             </button>
             <button
               onClick={() => setCurrentTimeIndex((prev) => (prev + 1) % metadata.times.length)}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition-colors"
+              className="p-1 sm:p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition-colors"
               title="Next Step"
             >
-              <SkipForward className="w-4 h-4" />
+              <SkipForward className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </button>
           </div>
 
           {/* Timeline Slider & Progress */}
-          <div className="flex-1 flex flex-col gap-1">
+          <div className="flex-1 flex flex-col gap-1 min-w-[140px] sm:min-w-[200px]">
             <div className="relative group flex items-center h-4">
-              {/* Custom Track Background with Glowing Buffer Fill */}
               <div className="absolute left-0 right-0 h-1.5 bg-slate-900 rounded-lg overflow-hidden pointer-events-none border border-slate-800/80">
                 <div
                   className="absolute top-0 bottom-0 bg-sky-500/30 border-r border-sky-400/80 rounded-r transition-all duration-300 shadow-[0_0_8px_rgba(56,189,248,0.5)]"
@@ -1572,7 +1563,6 @@ function Visualizer({ onNavigateAdmin }) {
                 ></div>
               </div>
 
-              {/* Range Input Overlay */}
               <input
                 type="range"
                 min="0"
@@ -1582,12 +1572,12 @@ function Visualizer({ onNavigateAdmin }) {
                 className="w-full h-1.5 bg-transparent rounded-lg appearance-none cursor-pointer accent-sky-400 z-10"
               />
             </div>
-            <div className="flex items-center justify-between text-[9px] text-slate-500 font-mono leading-none">
+            <div className="flex items-center justify-between text-[8px] sm:text-[9px] text-slate-500 font-mono leading-none">
               <span>0h</span>
-              <span className="flex items-center gap-1">
-                <span>Timeline Progress</span>
+              <span className="flex items-center gap-1 truncate max-w-[110px] sm:max-w-none">
+                <span className="hidden sm:inline">Timeline Progress</span>
                 {bufferedRange.count > 0 && (
-                  <span className="text-sky-400 font-bold">({bufferedRange.count}h buffered)</span>
+                  <span className="text-sky-400 font-bold">({bufferedRange.count}h)</span>
                 )}
               </span>
               <span>{metadata.times.length - 1}h</span>
@@ -1595,17 +1585,17 @@ function Visualizer({ onNavigateAdmin }) {
           </div>
 
           {/* Active Timestamp details */}
-          <div className="flex flex-col text-right shrink-0 border-l border-slate-900 pl-4 min-w-[110px]">
-            <span className="text-xs font-bold text-slate-200">
+          <div className="flex flex-col text-right shrink-0 border-l border-slate-900 pl-2 sm:pl-4 min-w-[85px] sm:min-w-[110px]">
+            <span className="text-[10px] sm:text-xs font-bold text-slate-200">
               {formatTime(metadata.times[currentTimeIndex])}
             </span>
-            <span className="text-[9px] text-slate-500 font-mono mt-0.5">
+            <span className="text-[8px] sm:text-[9px] text-slate-500 font-mono mt-0.5">
               Step {currentTimeIndex + 1} / {metadata.times.length}
             </span>
           </div>
 
           {/* Playback speed selector */}
-          <div className="flex items-center gap-2 border-l border-slate-900 pl-4 shrink-0">
+          <div className="hidden md:flex items-center gap-2 border-l border-slate-900 pl-4 shrink-0">
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Speed</span>
             <div className="flex gap-0.5 bg-slate-900/60 p-0.5 rounded-lg border border-slate-850">
               {[1, 2, 5, 10].map((speed) => (
@@ -1626,9 +1616,9 @@ function Visualizer({ onNavigateAdmin }) {
       )}
 
       {/* 5. Live Zoom Level Indicator (Top Right) */}
-      <div className="absolute top-[106px] right-6 bg-slate-950/85 border border-slate-800/80 backdrop-blur-md px-3.5 py-2 rounded-2xl shadow-xl z-20 pointer-events-auto flex items-center gap-2">
-        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Zoom</span>
-        <span className="text-xs font-mono font-bold text-sky-400 bg-sky-950/60 border border-sky-800/50 px-2 py-0.5 rounded-lg">
+      <div className="absolute top-[72px] sm:top-[106px] right-3 sm:right-6 bg-slate-950/85 border border-slate-800/80 backdrop-blur-md px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-xl sm:rounded-2xl shadow-xl z-20 pointer-events-auto flex items-center gap-1.5 sm:gap-2">
+        <span className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-wider">Zoom</span>
+        <span className="text-[10px] sm:text-xs font-mono font-bold text-sky-400 bg-sky-950/60 border border-sky-800/50 px-1.5 py-0.5 sm:px-2 rounded-md sm:rounded-lg">
           {viewState?.zoom ? viewState.zoom.toFixed(2) : '5.80'}
         </span>
       </div>
