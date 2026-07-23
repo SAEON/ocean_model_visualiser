@@ -284,16 +284,73 @@ def warm_dataset(file_path: str, max_workers: int = None):
     t1 = time.time()
     print(f"[Cache Warmer] Completed pre-computation for {os.path.basename(file_path)} in {(t1-t0):.1f} seconds.")
 
+from pymongo import MongoClient
+
+MONGODB_URL = os.environ.get("MONGODB_URL", "mongodb://localhost:27017")
+
+def get_mongodb_file_paths():
+    file_paths = set()
+    try:
+        client = MongoClient(MONGODB_URL, serverSelectionTimeoutMS=2000)
+        db = client.ocean_visualizer
+        members = list(db.members.find({}, {"variable_groups": 1}))
+        for m in members:
+            for vg in m.get("variable_groups", []):
+                fp = vg.get("file_path")
+                if fp:
+                    resolved = fp
+                    if not os.path.exists(resolved):
+                        if os.path.exists(os.path.join(os.getcwd(), os.path.basename(fp))):
+                            resolved = os.path.join(os.getcwd(), os.path.basename(fp))
+                        elif os.path.exists(os.path.join("/data", os.path.basename(fp))):
+                            resolved = os.path.join("/data", os.path.basename(fp))
+                    if os.path.exists(resolved):
+                        file_paths.add(resolved)
+        client.close()
+    except Exception as e:
+        print(f"[Cache Warmer] MongoDB discovery note: {e}")
+    return sorted(list(file_paths))
+
+def purge_orphan_caches(active_basenames: set):
+    cache_dirs = [
+        os.path.join(os.getcwd(), ".cache", "contours"),
+        os.path.join(os.getcwd(), ".cache", "currents")
+    ]
+    purged_count = 0
+    for cdir in cache_dirs:
+        if os.path.exists(cdir):
+            for fname in os.listdir(cdir):
+                fpath = os.path.join(cdir, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                matched = False
+                for active_base in active_basenames:
+                    if fname.startswith(f"{active_base}_"):
+                        matched = True
+                        break
+                if not matched:
+                    try:
+                        os.remove(fpath)
+                        purged_count += 1
+                    except Exception:
+                        pass
+    if purged_count > 0:
+        print(f"[Cache Warmer] Purged {purged_count} orphan cache files not listed in MongoDB.")
+
 def warm_all_datasets():
-    # Discover all .nc files in project root or /data/
-    nc_files = glob.glob(os.path.join(os.getcwd(), "*.nc"))
-    if os.path.exists("/data"):
-        nc_files.extend(glob.glob("/data/*.nc"))
-        nc_files.extend(glob.glob("/data/**/*.nc", recursive=True))
-    
-    unique_files = sorted(list(set(nc_files)))
-    print(f"[Cache Warmer] Found {len(unique_files)} NetCDF datasets to check: {[os.path.basename(f) for f in unique_files]}")
-    for file_path in unique_files:
+    # 1. Discover dataset files STRICTLY from MongoDB product member variable groups
+    db_file_paths = get_mongodb_file_paths()
+    if not db_file_paths:
+        print("[Cache Warmer] No NetCDF dataset file_paths found in MongoDB member variable_groups.")
+        return
+
+    active_basenames = {os.path.basename(f) for f in db_file_paths}
+
+    # 2. Purge orphan cache files for datasets NOT listed in MongoDB
+    purge_orphan_caches(active_basenames)
+
+    print(f"[Cache Warmer] Pre-computing cache strictly for {len(db_file_paths)} MongoDB dataset entries: {[os.path.basename(f) for f in db_file_paths]}")
+    for file_path in db_file_paths:
         warm_dataset(file_path)
 
 if __name__ == '__main__':
