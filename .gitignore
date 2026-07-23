@@ -26,6 +26,9 @@ dist/
 .env.local
 .env.*.local
 
+# Application Cache
+.cache/
+
 # OS files
 .DS_Store
 Thumbs.db

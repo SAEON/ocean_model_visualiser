@@ -1,20 +1,24 @@
 import os
 import time
+import json
 import asyncio
 from typing import Optional
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Query, HTTPException, Depends, status, Response
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from concurrent.futures import ProcessPoolExecutor
 import jwt
 import bcrypt
 import xarray as xr
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+import contourpy
 from shapely.geometry import Polygon, MultiPolygon, mapping
 from shapely.validation import make_valid
 from bson import ObjectId
@@ -98,6 +102,7 @@ ds = None
 metadata_cache = {}
 dataset_cache = {}
 contour_layer_cache = {}
+currents_layer_cache = {}
 
 async def get_cached_dataset(file_path: str):
     now = time.time()
@@ -304,6 +309,14 @@ app.add_middleware(
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+@app.post("/api/clear_cache")
+@app.get("/api/clear_cache")
+async def clear_cache():
+    contour_layer_cache.clear()
+    currents_layer_cache.clear()
+    dataset_cache.clear()
+    return {"status": "success", "message": "Backend dataset and contour/currents caches cleared"}
+
 # Authentication Endpoints
 @app.post("/api/auth/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
@@ -345,6 +358,22 @@ def compute_contours_sync(file_path: Optional[str], variable: str, time_idx: int
     if cache_key in contour_layer_cache:
         return contour_layer_cache[cache_key]
 
+    # Persistent Disk Cache Check
+    cache_dir = os.path.join(os.getcwd(), ".cache", "contours")
+    os.makedirs(cache_dir, exist_ok=True)
+    file_basename = os.path.basename(file_path or 'default')
+    cache_filename = f"{file_basename}_{variable}_{depth}_{time_idx}_tol{tolerance}_{int(loaded_time)}.json"
+    disk_cache_path = os.path.join(cache_dir, cache_filename)
+
+    if os.path.exists(disk_cache_path):
+        try:
+            with open(disk_cache_path, "r") as f:
+                res = json.load(f)
+                contour_layer_cache[cache_key] = res
+                return res
+        except Exception:
+            pass
+
     time_sampling = meta.get("time_sampling", 1)
     actual_time = time_idx * time_sampling
 
@@ -379,10 +408,13 @@ def compute_contours_sync(file_path: Optional[str], variable: str, time_idx: int
     z_clipped = np.clip(z, p1, p99)
     levels = np.linspace(p1, p99, 20)
     
-    fig, ax = plt.subplots()
+    fig = Figure()
+    ax = fig.subplots()
     cs = ax.contourf(lon, lat, z_clipped, levels=levels)
     
     features = []
+    simp_tol = tolerance if tolerance > 0 else 0.0005
+
     for i, path in enumerate(cs.get_paths()):
         level_min = cs.levels[i]
         level_max = cs.levels[i+1]
@@ -395,8 +427,13 @@ def compute_contours_sync(file_path: Optional[str], variable: str, time_idx: int
         for ring in rings:
             if len(ring) < 4:
                 continue
-            polys.append(Polygon(ring))
-            
+            p = Polygon(ring)
+            if not p.is_valid:
+                p = make_valid(p)
+            p_simple = p.simplify(simp_tol, preserve_topology=True)
+            if not p_simple.is_empty:
+                polys.append(p_simple)
+                
         if not polys:
             continue
             
@@ -404,9 +441,6 @@ def compute_contours_sync(file_path: Optional[str], variable: str, time_idx: int
         
         shells = []
         for poly in polys:
-            if not poly.is_valid:
-                poly = make_valid(poly)
-            
             inserted = False
             for shell_info in shells:
                 if shell_info['poly'].contains(poly):
@@ -424,33 +458,35 @@ def compute_contours_sync(file_path: Optional[str], variable: str, time_idx: int
             if not geom.is_empty:
                 level_polygons.append(geom)
                 
-        if not level_polygons:
+        polygons_to_combine = []
+        for g in level_polygons:
+            if g.is_empty:
+                continue
+            if g.geom_type == 'Polygon':
+                polygons_to_combine.append(g)
+            elif g.geom_type == 'MultiPolygon':
+                polygons_to_combine.extend(g.geoms)
+            elif g.geom_type == 'GeometryCollection':
+                for sub_g in g.geoms:
+                    if sub_g.geom_type == 'Polygon':
+                        polygons_to_combine.append(sub_g)
+                    elif sub_g.geom_type == 'MultiPolygon':
+                        polygons_to_combine.extend(sub_g.geoms)
+
+        if not polygons_to_combine:
             continue
             
-        if len(level_polygons) == 1:
-            final_geom = level_polygons[0]
-        else:
-            final_geom = MultiPolygon(level_polygons)
-            
-        if tolerance > 0:
-            simplified = final_geom.simplify(tolerance, preserve_topology=True)
-        else:
-            simplified = final_geom
-            
-        if simplified.is_empty:
-            continue
-            
+        final_geom = polygons_to_combine[0] if len(polygons_to_combine) == 1 else MultiPolygon(polygons_to_combine)
+
         features.append({
             "type": "Feature",
-            "geometry": mapping(simplified),
+            "geometry": mapping(final_geom),
             "properties": {
                 "value_min": float(level_min),
                 "value_max": float(level_max),
                 "value": float((level_min + level_max) / 2.0)
             }
         })
-        
-    plt.close(fig)
     
     res = {
         "type": "FeatureCollection",
@@ -458,9 +494,16 @@ def compute_contours_sync(file_path: Optional[str], variable: str, time_idx: int
         "value_min": float(p1),
         "value_max": float(p99)
     }
+    
+    # Save to disk cache for instantaneous loading on repeat requests/restarts
+    try:
+        with open(disk_cache_path, "w") as f:
+            json.dump(res, f)
+    except Exception:
+        pass
+
     contour_layer_cache[cache_key] = res
     return res
-
 
 @app.get("/api/contours")
 async def get_contours(
@@ -502,47 +545,89 @@ async def get_contours(
         compute_contours_sync, file_path, variable, time, depth, tolerance, loaded_time, dataset, meta
     )
 
-def compute_currents_sync(dataset, meta, actual_time: int, depth: int, downsample: int = 1):
+def compute_currents_sync(file_path: Optional[str], dataset, meta, time_idx: int, depth: int, loaded_time: float, downsample: int = 2):
+    cache_key = (file_path or '', depth, time_idx, downsample, loaded_time)
+    if cache_key in currents_layer_cache:
+        return currents_layer_cache[cache_key]
+
+    # Persistent Disk Cache Check
+    cache_dir = os.path.join(os.getcwd(), ".cache", "currents")
+    os.makedirs(cache_dir, exist_ok=True)
+    file_basename = os.path.basename(file_path or 'default')
+    cache_filename = f"{file_basename}_curr_d{depth}_t{time_idx}_ds{downsample}_{int(loaded_time)}.json"
+    disk_cache_path = os.path.join(cache_dir, cache_filename)
+
+    if os.path.exists(disk_cache_path):
+        try:
+            with open(disk_cache_path, "r") as f:
+                res = json.load(f)
+                currents_layer_cache[cache_key] = res
+                return res
+        except Exception:
+            pass
+
+    time_sampling = meta.get("time_sampling", 1)
+    actual_time = time_idx * time_sampling
+
     u_slice = dataset['u'].isel(time=actual_time, depth=depth).values
     v_slice = dataset['v'].isel(time=actual_time, depth=depth).values
     lon = dataset['lon_rho'].values
     lat = dataset['lat_rho'].values
     
+    mask = None
+    for mask_name in ['mask_rho', 'mask']:
+        if mask_name in dataset:
+            mask = dataset[mask_name].values
+            break
+
     lon_ds = lon[::downsample, ::downsample]
     lat_ds = lat[::downsample, ::downsample]
     u_ds = u_slice[::downsample, ::downsample]
     v_ds = v_slice[::downsample, ::downsample]
+    mask_ds = mask[::downsample, ::downsample] if mask is not None else None
     
     rows, cols = lon_ds.shape
     i_grid, j_grid = np.ogrid[:rows, :cols]
-    i_mat = np.broadcast_to(i_grid, (rows, cols))
-    j_mat = np.broadcast_to(j_grid, (rows, cols))
+    i_mat = np.broadcast_to(i_grid, (rows, cols)) * downsample
+    j_mat = np.broadcast_to(j_grid, (rows, cols)) * downsample
 
-    valid = ~(np.isnan(lon_ds) | np.isnan(lat_ds) | np.isnan(u_ds) | np.isnan(v_ds))
+    # Static surface ocean grid mask (independent of depth NaNs to prevent index shifts)
+    valid_static = ~(np.isnan(lon_ds) | np.isnan(lat_ds))
+    if mask_ds is not None:
+        valid_static = valid_static & (mask_ds != 0)
 
-    lons = lon_ds[valid]
-    lats = lat_ds[valid]
-    us = u_ds[valid]
-    vs = v_ds[valid]
-    is_arr = i_mat[valid]
-    js_arr = j_mat[valid]
+    u_vals = np.nan_to_num(u_ds[valid_static], nan=0.0)
+    v_vals = np.nan_to_num(v_ds[valid_static], nan=0.0)
 
-    return [
-        [float(lon_val), float(lat_val), float(u_val), float(v_val), int(i_val), int(j_val)]
-        for lon_val, lat_val, u_val, v_val, i_val, j_val in zip(lons, lats, us, vs, is_arr, js_arr)
-    ]
+    data_mat = np.column_stack([
+        np.round(u_vals, 4),
+        np.round(v_vals, 4)
+    ])
+    res = data_mat.tolist()
+
+    try:
+        with open(disk_cache_path, "w") as f:
+            json.dump(res, f)
+    except Exception:
+        pass
+
+    currents_layer_cache[cache_key] = res
+    return res
 
 @app.get("/api/currents")
 async def get_currents(
     response: Response,
     time: int = Query(..., description="Time index (0-239)"),
     depth: int = Query(0, description="Depth index (0-6)"),
-    downsample: int = Query(3, description="Skip interval for downsampling grid"),
+    downsample: int = Query(2, description="Skip interval for downsampling grid"),
     file_path: Optional[str] = Query(None, description="Path to specific NetCDF file")
 ):
     response.headers["Cache-Control"] = "public, max-age=86400"
+    loaded_time = 0.0
     if file_path:
         dataset, meta = await get_cached_dataset(file_path)
+        if file_path in dataset_cache:
+            loaded_time = dataset_cache[file_path][2]
     else:
         dataset = ds
         meta = metadata_cache
@@ -559,10 +644,7 @@ async def get_currents(
     if depth < 0 or depth >= len(meta['depths']):
         raise HTTPException(status_code=400, detail=f"Depth index must be between 0 and {len(meta['depths'])-1}")
 
-    time_sampling = meta.get("time_sampling", 1)
-    actual_time = time * time_sampling
-
-    return compute_currents_sync(dataset, meta, actual_time, depth, downsample)
+    return compute_currents_sync(file_path, dataset, meta, time, depth, loaded_time, downsample)
 
 @app.get("/api/frame")
 async def get_frame(
@@ -611,12 +693,74 @@ async def get_frame(
         result["contours"] = None
 
     if include_currents and has_currents:
-        currents = compute_currents_sync(dataset, meta, actual_time, depth, 1)
+        currents = await asyncio.to_thread(
+            compute_currents_sync, file_path, dataset, meta, time, depth, loaded_time, 2
+        )
         result["currents"] = currents
     else:
         result["currents"] = None
 
     return result
+
+
+@app.get("/api/stream_frames")
+async def stream_frames(
+    variable: str = Query("temp", description="Variable: temp, salt, zeta"),
+    time_start: int = Query(0, description="Start time index"),
+    count: Optional[int] = Query(None, description="Number of frames to stream"),
+    depth: int = Query(0, description="Depth index (0-6)"),
+    tolerance: float = Query(0.001, description="Shapely simplification tolerance in degrees"),
+    file_path: Optional[str] = Query(None, description="Path to specific NetCDF file"),
+    include_contours: bool = Query(True),
+    include_currents: bool = Query(True)
+):
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    loaded_time = 0.0
+    if file_path:
+        dataset, meta = await get_cached_dataset(file_path)
+        if file_path in dataset_cache:
+            loaded_time = dataset_cache[file_path][2]
+    else:
+        dataset = ds
+        meta = metadata_cache
+        
+    if dataset is None:
+        raise HTTPException(status_code=503, detail="Dataset not loaded")
+
+    total_times = len(meta.get('times', []))
+    if total_times == 0:
+        raise HTTPException(status_code=400, detail="No time steps in dataset")
+
+    num_frames = count if (count and count > 0) else total_times
+    time_indices = [(time_start + i) % total_times for i in range(num_frames)]
+
+    has_contours = variable in meta.get('ranges', {})
+    has_currents = 'u' in meta.get('ranges', {}) and 'v' in meta.get('ranges', {})
+
+    async def generate_stream():
+        for t_idx in time_indices:
+            frame_data = {"time": t_idx}
+
+            if include_contours and has_contours:
+                contours = await asyncio.to_thread(
+                    compute_contours_sync, file_path, variable, t_idx, depth, tolerance, loaded_time, dataset, meta
+                )
+                frame_data["contours"] = contours
+            else:
+                frame_data["contours"] = None
+
+            if include_currents and has_currents:
+                currents = await asyncio.to_thread(
+                    compute_currents_sync, file_path, dataset, meta, t_idx, depth, loaded_time, 2
+                )
+                frame_data["currents"] = currents
+            else:
+                frame_data["currents"] = None
+
+            yield json.dumps(frame_data) + "\n"
+            await asyncio.sleep(0.001)
+
+    return StreamingResponse(generate_stream(), headers=headers, media_type="application/x-ndjson")
 
 
 @app.get("/api/points")

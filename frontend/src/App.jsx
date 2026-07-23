@@ -115,17 +115,15 @@ function interpolateColor(t, stops) {
 
 const getZoomParameters = (zoom) => {
   const z = zoom || 5.8;
-  if (z < 5.5)  return { downsample: 10, maxPixels: 5 };
-  if (z < 6.0)  return { downsample: 10, maxPixels: 10 };
-  if (z < 6.5)  return { downsample: 8,  maxPixels: 10 };
-  if (z < 7.0)  return { downsample: 7,  maxPixels: 15 };
-  if (z < 7.5)  return { downsample: 6,  maxPixels: 15 };
-  if (z < 8.0)  return { downsample: 5,  maxPixels: 15 };
-  if (z < 9.0)  return { downsample: 5,  maxPixels: 20 };
-  if (z < 10.0) return { downsample: 4,  maxPixels: 30 };
-  if (z < 11.0) return { downsample: 3,  maxPixels: 30 };
-  if (z < 12.0) return { downsample: 2,  maxPixels: 30 };
-  return { downsample: 1, maxPixels: 30 };
+  if (z < 5.5) return { downsample: 10, maxPixels: 5 };
+  if (z < 5.5) return { downsample: 6, maxPixels: 10 };
+  if (z < 6.0) return { downsample: 5, maxPixels: 15 };
+  if (z < 6.5) return { downsample: 5, maxPixels: 15 };
+  if (z < 7.0) return { downsample: 3, maxPixels: 18 };
+  if (z < 8) return { downsample: 3, maxPixels: 20 };
+  if (z < 9.0) return { downsample: 3, maxPixels: 25 };
+  if (z < 10.0) return { downsample: 2, maxPixels: 25 };
+  return { downsample: 1, maxPixels: 35 };
 };
 
 function Visualizer({ onNavigateAdmin }) {
@@ -136,7 +134,7 @@ function Visualizer({ onNavigateAdmin }) {
   const [productMembers, setProductMembers] = useState([]);
   const [selectedMember, setSelectedMember] = useState(null);
   const [selectedGroup, setSelectedGroup] = useState(null);
-  
+
   // App States
   const [metadata, setMetadata] = useState(null);
   const [currentTimeIndex, setCurrentTimeIndex] = useState(0);
@@ -146,7 +144,7 @@ function Visualizer({ onNavigateAdmin }) {
   const [playbackSpeed, setPlaybackSpeed] = useState(2); // steps per second
   const [showCurrents, setShowCurrents] = useState(true);
   const [showContours, setShowContours] = useState(true);
-  
+
   // Customization States
   const [targetMaxPixels, setTargetMaxPixels] = useState(40);
   const [downsampleRate, setDownsampleRate] = useState(3);
@@ -217,6 +215,11 @@ function Visualizer({ onNavigateAdmin }) {
     currentsCacheRef.current = currentsCache;
   }, [currentsCache]);
 
+  const currentTimeIndexRef = useRef(currentTimeIndex);
+  useEffect(() => {
+    currentTimeIndexRef.current = currentTimeIndex;
+  }, [currentTimeIndex]);
+
   // Viewport State
   const [viewState, setViewState] = useState(INITIAL_VIEW_STATE);
 
@@ -224,15 +227,15 @@ function Visualizer({ onNavigateAdmin }) {
   const { autoDownsampleRate, autoMaxPixels, quantizedZoom } = useMemo(() => {
     const z = viewState?.zoom || 5.8;
     const params = getZoomParameters(z);
-    
+
     let qz = 12.0;
-    if (z < 5.5)  qz = 5.0;
-    else if (z < 6.0)  qz = 5.5;
-    else if (z < 6.5)  qz = 6.0;
-    else if (z < 7.0)  qz = 6.5;
-    else if (z < 7.5)  qz = 7.0;
-    else if (z < 8.0)  qz = 7.5;
-    else if (z < 9.0)  qz = 8.0;
+    if (z < 5.5) qz = 5.0;
+    else if (z < 6.0) qz = 5.5;
+    else if (z < 6.5) qz = 6.0;
+    else if (z < 7.0) qz = 6.5;
+    else if (z < 7.5) qz = 7.0;
+    else if (z < 8.0) qz = 7.5;
+    else if (z < 9.0) qz = 8.0;
     else if (z < 10.0) qz = 9.0;
     else if (z < 11.0) qz = 10.0;
     else if (z < 12.0) qz = 11.0;
@@ -268,7 +271,7 @@ function Visualizer({ onNavigateAdmin }) {
     }
     const filePath = selectedGroup.file_path;
     setLoadingPoints(true);
-    fetch(`${API_URL}/api/points?file_path=${encodeURIComponent(filePath)}&downsample=3`)
+    fetch(`${API_URL}/api/points?file_path=${encodeURIComponent(filePath)}&downsample=2`)
       .then((res) => {
         if (!res.ok) throw new Error('API server returned error');
         return res.json();
@@ -292,7 +295,7 @@ function Visualizer({ onNavigateAdmin }) {
     }
     const filePath = selectedGroup.file_path;
     const dIdx = timeSeriesVariable === 'zeta' ? 0 : currentDepthIndex;
-    
+
     setLoadingTimeSeries(true);
     fetch(`${API_URL}/api/timeseries?file_path=${encodeURIComponent(filePath)}&variable=${timeSeriesVariable}&depth=${dIdx}&i=${clickedPoint.i}&j=${clickedPoint.j}`)
       .then((res) => {
@@ -347,7 +350,7 @@ function Visualizer({ onNavigateAdmin }) {
 
   const handleSelectVariableGroup = async (group, member) => {
     setSelectedGroup(group);
-    
+
     // Pick active variable from options
     const available = group.variables || [];
     if (available.length > 0 && !available.includes(selectedVariable)) {
@@ -365,7 +368,7 @@ function Visualizer({ onNavigateAdmin }) {
     // Automatically enable/disable contours or currents toggles based on variable availability
     const hasGroupContours = available.some(v => ['temp', 'salt', 'zeta'].includes(v));
     const hasGroupCurrents = available.includes('currents');
-    
+
     if (hasGroupContours && !hasGroupCurrents) {
       setShowContours(true);
       setShowCurrents(false);
@@ -384,7 +387,7 @@ function Visualizer({ onNavigateAdmin }) {
         setMetadata(data);
         setCurrentTimeIndex(0);
         setCurrentDepthIndex(0);
-        
+
         // Fly map viewport to center of bounds if present
         if (data.bounds) {
           const centerLon = (data.bounds.lon_min + data.bounds.lon_max) / 2;
@@ -397,11 +400,27 @@ function Visualizer({ onNavigateAdmin }) {
             transitionDuration: 1000
           }));
         }
+        // Clear caches on group change
+        setContourCache({});
+        setCurrentsCache({});
+        fetchingFrameKeysRef.current.clear();
+        fetch(`${API_URL}/api/clear_cache`, { method: 'POST' }).catch(() => { });
       } else {
         console.error("Failed to load metadata for file:", group.file_path);
       }
     } catch (e) {
       console.error("Error fetching metadata:", e);
+    }
+  };
+
+  const handleClearAllCaches = async () => {
+    setContourCache({});
+    setCurrentsCache({});
+    fetchingFrameKeysRef.current.clear();
+    try {
+      await fetch(`${API_URL}/api/clear_cache`, { method: 'POST' });
+    } catch (e) {
+      console.error("Failed to clear backend cache", e);
     }
   };
 
@@ -436,12 +455,7 @@ function Visualizer({ onNavigateAdmin }) {
         setContourCache((prev) => ({ ...prev, [contourKey]: data.contours }));
       }
       if (data.currents) {
-        const mappedCurrents = data.currents.map((pt) =>
-          Array.isArray(pt)
-            ? { lng: pt[0], lat: pt[1], u: pt[2], v: pt[3], i: pt[4], j: pt[5] }
-            : pt
-        );
-        setCurrentsCache((prev) => ({ ...prev, [currentsKey]: mappedCurrents }));
+        setCurrentsCache((prev) => ({ ...prev, [currentsKey]: data.currents }));
       }
     } catch (err) {
       if (err.name !== 'AbortError') {
@@ -452,58 +466,96 @@ function Visualizer({ onNavigateAdmin }) {
     }
   };
 
-  // Coupled Pre-fetching and sliding-window cache logic
+  // Single-connection NDJSON Stream Prefetching
   useEffect(() => {
-    if (!metadata) return;
+    if (!metadata || !selectedGroup) return;
 
     let isCancelled = false;
     const controller = new AbortController();
+    const filePath = selectedGroup.file_path || '';
+    const dIdx = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
     const numSteps = metadata.times.length;
-    const filePath = selectedGroup?.file_path || '';
+    const startIdx = currentTimeIndexRef.current || 0;
 
-    const ensureData = async (timeIdx) => {
-      const dIdx = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
-      const contourKey = `${filePath}_${selectedVariable}_${dIdx}_${timeIdx}_tol${simplification}`;
-      const currentsDepth = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
-      const currentsKey = `${filePath}_${currentsDepth}_${timeIdx}`;
+    const streamPrefetch = async () => {
+      // 1. Fetch active start frame immediately if missing
+      const firstContourKey = `${filePath}_${selectedVariable}_${dIdx}_${startIdx}_tol${simplification}`;
+      const firstCurrentsKey = `${filePath}_${dIdx}_${startIdx}`;
+      const needFirstContours = showContours && !contourCacheRef.current[firstContourKey];
+      const needFirstCurrents = showCurrents && !currentsCacheRef.current[firstCurrentsKey];
 
-      const needContours = showContours && !contourCacheRef.current[contourKey];
-      const needCurrents = showCurrents && !currentsCacheRef.current[currentsKey];
+      if (needFirstContours || needFirstCurrents) {
+        await fetchFrameData(filePath, selectedVariable, dIdx, startIdx, simplification, needFirstContours, needFirstCurrents, controller.signal);
+      }
 
-      if (!needContours && !needCurrents) return;
+      if (isCancelled || controller.signal.aborted) return;
 
-      await fetchFrameData(filePath, selectedVariable, dIdx, timeIdx, simplification, needContours, needCurrents, controller.signal);
-    };
+      // 2. Stream all remaining frames over ONE single HTTP connection
+      const streamUrl = `${API_URL}/api/stream_frames?variable=${selectedVariable}&depth=${dIdx}&tolerance=${simplification}` +
+        `&start_time=${startIdx}&count=${numSteps}` +
+        `&include_contours=${showContours}&include_currents=${showCurrents}` +
+        (filePath ? `&file_path=${encodeURIComponent(filePath)}` : '');
 
-    // 1. Load current step (+0) and immediate next step (+1) with high priority
-    ensureData(currentTimeIndex);
-    if (numSteps > 1) {
-      ensureData((currentTimeIndex + 1) % numSteps);
-    }
+      try {
+        const response = await fetch(streamUrl, { signal: controller.signal });
+        if (!response.ok || !response.body) return;
 
-    // 2. Sequentially prefetch buffer (+2 to end of dataset) in small controlled batches of 2 steps
-    const runPrefetchLoop = async () => {
-      await new Promise((r) => setTimeout(r, 100));
-      
-      for (let i = 2; i < numSteps; i += 2) {
-        if (isCancelled || controller.signal.aborted) break;
-        const stepA = (currentTimeIndex + i) % numSteps;
-        const stepB = (currentTimeIndex + i + 1) % numSteps;
-        
-        await Promise.allSettled([
-          ensureData(stepA),
-          ensureData(stepB)
-        ]);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let partialLine = '';
+
+        while (true) {
+          if (isCancelled || controller.signal.aborted) break;
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = (partialLine + chunk).split('\n');
+          partialLine = lines.pop(); // save trailing partial line
+
+          const pendingContours = {};
+          const pendingCurrents = {};
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const data = JSON.parse(line);
+              const tIdx = data.time;
+              const cKey = `${filePath}_${selectedVariable}_${dIdx}_${tIdx}_tol${simplification}`;
+              const vKey = `${filePath}_${dIdx}_${tIdx}`;
+
+              if (data.contours) {
+                pendingContours[cKey] = data.contours;
+              }
+              if (data.currents) {
+                pendingCurrents[vKey] = data.currents;
+              }
+            } catch (e) {
+              console.error("Error parsing stream line:", e);
+            }
+          }
+
+          if (Object.keys(pendingContours).length > 0) {
+            setContourCache((prev) => ({ ...prev, ...pendingContours }));
+          }
+          if (Object.keys(pendingCurrents).length > 0) {
+            setCurrentsCache((prev) => ({ ...prev, ...pendingCurrents }));
+          }
+        }
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.error("Stream prefetch error:", err);
+        }
       }
     };
 
-    runPrefetchLoop();
+    streamPrefetch();
 
     return () => {
       isCancelled = true;
       controller.abort();
     };
-  }, [selectedVariable, currentDepthIndex, currentTimeIndex, simplification, showContours, showCurrents, metadata, selectedGroup]);
+  }, [selectedVariable, currentDepthIndex, simplification, showContours, showCurrents, metadata, selectedGroup]);
 
   // Playback Loop
   useEffect(() => {
@@ -512,7 +564,7 @@ function Visualizer({ onNavigateAdmin }) {
       timer = setInterval(() => {
         const dIdx = selectedVariable === 'zeta' ? 0 : currentDepthIndex;
         const filePath = selectedGroup?.file_path || '';
-        
+
         setCurrentTimeIndex((prev) => {
           const contourKey = `${filePath}_${selectedVariable}_${dIdx}_${prev}_tol${simplification}`;
           const currentsKey = `${filePath}_${dIdx}_${prev}`;
@@ -524,7 +576,7 @@ function Visualizer({ onNavigateAdmin }) {
             // The current frame hasn't loaded yet. Stay here and wait.
             return prev;
           }
-          
+
           // Advance to the next frame
           return (prev + 1) % metadata.times.length;
         });
@@ -576,7 +628,27 @@ function Visualizer({ onNavigateAdmin }) {
   }, [metadata, selectedGroup, currentTimeIndex, selectedVariable, currentDepthIndex, simplification, showContours, showCurrents, contourCache, currentsCache]);
 
   const activeContours = selectedGroup && showContours ? contourCache[activeContourKey] : null;
-  const activeCurrents = selectedGroup && showCurrents ? currentsCache[activeCurrentsKey] : null;
+  const rawActiveCurrents = selectedGroup && showCurrents ? currentsCache[activeCurrentsKey] : null;
+
+  const activeCurrents = useMemo(() => {
+    if (!rawActiveCurrents) return null;
+    if (!pointsData || pointsData.length === 0) return rawActiveCurrents;
+    if (rawActiveCurrents.length > 0 && Array.isArray(rawActiveCurrents[0]) && rawActiveCurrents[0].length === 2) {
+      return rawActiveCurrents.map((uv, idx) => {
+        const pt = pointsData[idx] || {};
+        return {
+          lng: pt.lng ?? pt[0],
+          lat: pt.lat ?? pt[1],
+          u: uv[0],
+          v: uv[1],
+          i: pt.i ?? pt[2],
+          j: pt.j ?? pt[3]
+        };
+      });
+    }
+    return rawActiveCurrents;
+  }, [rawActiveCurrents, pointsData]);
+
   const isLoading = selectedGroup ? ((showContours && !activeContours) || (showCurrents && !activeCurrents)) : false;
 
   // Double-buffering: hold last rendered data to avoid blinks while loading
@@ -593,9 +665,9 @@ function Visualizer({ onNavigateAdmin }) {
     if (!renderedData?.currents) return [];
     if (autoDownsampleRate <= 1) return renderedData.currents;
     const step = autoDownsampleRate;
-    return renderedData.currents.filter((pt) => 
-      (pt.i !== undefined && pt.j !== undefined) 
-        ? (pt.i % step === 0 && pt.j % step === 0) 
+    return renderedData.currents.filter((pt) =>
+      (pt.i !== undefined && pt.j !== undefined)
+        ? (pt.i % step === 0 && pt.j % step === 0)
         : true
     );
   }, [renderedData?.currents, autoDownsampleRate]);
@@ -607,7 +679,7 @@ function Visualizer({ onNavigateAdmin }) {
     const range = (selectedVariable !== 'zeta' && Array.isArray(rangeObj))
       ? rangeObj[currentDepthIndex]
       : rangeObj;
-      
+
     let activeStops = TEMP_STOPS;
     if (selectedVariable === 'salt') activeStops = SALT_STOPS;
     if (selectedVariable === 'zeta') activeStops = ZETA_STOPS;
@@ -642,7 +714,7 @@ function Visualizer({ onNavigateAdmin }) {
     const dIdx = currentDepthIndex;
     const uRange = Array.isArray(metadata.ranges.u) ? metadata.ranges.u[dIdx] : metadata.ranges.u;
     const vRange = Array.isArray(metadata.ranges.v) ? metadata.ranges.v[dIdx] : metadata.ranges.v;
-    
+
     const uMax = Math.max(Math.abs(uRange.min), Math.abs(uRange.max));
     const vMax = Math.max(Math.abs(vRange.min), Math.abs(vRange.max));
     return Math.sqrt(uMax * uMax + vMax * vMax);
@@ -727,15 +799,24 @@ function Visualizer({ onNavigateAdmin }) {
           widthMinPixels: 1.5,
           widthMaxPixels: 3.5,
           getPath: (d) => {
-            const dx = d.u * dynamicVectorScale;
-            const dy = d.v * dynamicVectorScale;
-            const L = Math.sqrt(dx * dx + dy * dy);
+            let dx = d.u * dynamicVectorScale;
+            let dy = d.v * dynamicVectorScale;
+            let L = Math.sqrt(dx * dx + dy * dy);
             if (L === 0) return [[d.lng, d.lat], [d.lng, d.lat]];
+
+            const maxAllowedL = TARGET_MAX_PIXELS * 1.5 * degPerPixel;
+            if (L > maxAllowedL) {
+              const scale = maxAllowedL / L;
+              dx *= scale;
+              dy *= scale;
+              L = maxAllowedL;
+            }
+
             const theta = Math.atan2(dy, dx);
-            
+
             // Arrowhead barb length (up to 7 pixels in degrees)
             const barbLength = Math.min(L * 0.35, 7 * degPerPixel);
-            
+
             return [
               [d.lng, d.lat],
               [d.lng + dx, d.lat + dy],
@@ -782,7 +863,7 @@ function Visualizer({ onNavigateAdmin }) {
               const standardVars = ['temp', 'salt', 'zeta'];
               const activeStandard = standardVars.includes(selectedVariable) ? selectedVariable : null;
               const defaultVar = activeStandard || available.find(v => standardVars.includes(v)) || 'temp';
-              
+
               setClickedPoint({
                 lat: info.object.lat,
                 lng: info.object.lng,
@@ -845,7 +926,7 @@ function Visualizer({ onNavigateAdmin }) {
   // Handle Tooltips
   const getTooltip = ({ object }) => {
     if (!object) return null;
-    
+
     // Product region hover
     if (object.properties && object.properties.name && object.properties.value === undefined) {
       return {
@@ -866,11 +947,11 @@ function Visualizer({ onNavigateAdmin }) {
       const valMaxVal = object.properties.value_max;
       const unit = selectedVariable === 'temp' ? '°C' : selectedVariable === 'salt' ? 'g/kg' : 'm';
       const name = selectedVariable === 'temp' ? 'Temperature' : selectedVariable === 'salt' ? 'Salinity' : 'Sea Surface Height';
-      
+
       const valDisplay = (valMinVal !== undefined && valMaxVal !== undefined)
         ? `${valMinVal.toFixed(2)} - ${valMaxVal.toFixed(2)} ${unit}`
         : `${val.toFixed(2)} ${unit}`;
-        
+
       return {
         html: `
           <div class="p-2.5 bg-slate-950/95 border border-slate-700/80 backdrop-blur text-slate-100 rounded-xl shadow-xl text-xs space-y-1">
@@ -976,18 +1057,18 @@ function Visualizer({ onNavigateAdmin }) {
         {/* Left: Clickable Logos & Title */}
         <div className="flex items-center gap-4 shrink-0">
           <div className="flex items-center gap-3 py-1">
-            <a 
-              href="https://www.saeon.ac.za/" 
-              target="_blank" 
+            <a
+              href="https://www.saeon.ac.za/"
+              target="_blank"
               rel="noopener noreferrer"
               className="hover:opacity-80 transition-opacity"
               title="Visit NRF SAEON Website"
             >
               <img src={`${import.meta.env.BASE_URL}saeon-logo.png`} alt="SAEON Logo" className="h-8 w-auto object-contain" />
             </a>
-            <a 
-              href="https://somisana.ac.za/" 
-              target="_blank" 
+            <a
+              href="https://somisana.ac.za/"
+              target="_blank"
               rel="noopener noreferrer"
               className="hover:opacity-80 transition-opacity"
               title="Visit SOMISANA Website"
@@ -1006,10 +1087,10 @@ function Visualizer({ onNavigateAdmin }) {
         {/* Center: Active Model & Region status text */}
         <div className="flex-1 flex justify-center items-center px-4 text-center">
           <p className="text-xs text-slate-300 font-medium bg-slate-900/80 border border-slate-800/80 px-4 py-1.5 rounded-full shadow-inner truncate max-w-xl">
-            {selectedMember 
-              ? `Active Model: ${selectedMember.name} (Region: ${clickedProduct?.name || 'Unknown'})` 
-              : clickedProduct 
-                ? `Region: ${clickedProduct.name} - Select a member model to begin` 
+            {selectedMember
+              ? `Active Model: ${selectedMember.name} (Region: ${clickedProduct?.name || 'Unknown'})`
+              : clickedProduct
+                ? `Region: ${clickedProduct.name} - Select a member model to begin`
                 : "Select a region to explore"}
           </p>
         </div>
@@ -1046,7 +1127,7 @@ function Visualizer({ onNavigateAdmin }) {
           <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider text-center truncate max-w-full pb-1 border-b border-slate-900 w-full">
             {selectedVariable === 'temp' ? 'Temp' : selectedVariable === 'salt' ? 'Salt' : 'SSH'}
           </div>
-          
+
           {/* Ramp Container */}
           <div className="flex-1 w-full flex justify-center gap-2.5 my-2.5">
             {/* Color bar */}
@@ -1056,7 +1137,7 @@ function Visualizer({ onNavigateAdmin }) {
                 background: `linear-gradient(to top, ${stops.map(s => `rgb(${s.color.slice(0, 3).join(',')})`).join(', ')})`
               }}
             ></div>
-            
+
             {/* 5 Values */}
             <div className="flex flex-col justify-between text-[9px] font-mono text-slate-400 h-full text-left py-0.5">
               {legendValues.map((val, i) => (
@@ -1066,8 +1147,8 @@ function Visualizer({ onNavigateAdmin }) {
                     i === 0 || i === legendValues.length - 1
                       ? "text-slate-200 font-medium"
                       : i === 2
-                      ? "text-slate-300"
-                      : "text-slate-500"
+                        ? "text-slate-300"
+                        : "text-slate-500"
                   }
                 >
                   {val}
@@ -1098,23 +1179,23 @@ function Visualizer({ onNavigateAdmin }) {
             return (
               <div className="flex items-center justify-between gap-4 py-1">
                 <div className="flex items-center justify-center min-w-[35px]">
-                  <svg 
+                  <svg
                     style={{ width: `${Math.max(legendArrowPixels, 12)}px`, height: '16px' }}
                     viewBox={`0 0 ${Math.max(legendArrowPixels, 12)} 16`}
                     className="overflow-visible"
                   >
-                    <line 
-                      x1="0" 
-                      y1="8" 
-                      x2={Math.max(0, legendArrowPixels - 5)} 
-                      y2="8" 
-                      stroke="#38bdf8" 
-                      strokeWidth="2" 
-                      strokeLinecap="round" 
+                    <line
+                      x1="0"
+                      y1="8"
+                      x2={Math.max(0, legendArrowPixels - 5)}
+                      y2="8"
+                      stroke="#38bdf8"
+                      strokeWidth="2"
+                      strokeLinecap="round"
                     />
-                    <polygon 
-                      points={`${Math.max(0, legendArrowPixels - 5)},5 ${legendArrowPixels},8 ${Math.max(0, legendArrowPixels - 5)},11`} 
-                      fill="#38bdf8" 
+                    <polygon
+                      points={`${Math.max(0, legendArrowPixels - 5)},5 ${legendArrowPixels},8 ${Math.max(0, legendArrowPixels - 5)},11`}
+                      fill="#38bdf8"
                     />
                   </svg>
                 </div>
@@ -1129,7 +1210,7 @@ function Visualizer({ onNavigateAdmin }) {
 
       {/* 3. Left Sidebar Control Panel Stack */}
       <div className="absolute top-[106px] left-6 w-96 z-10 flex flex-col gap-4 pointer-events-auto max-h-[calc(100vh-186px)] overflow-y-auto pr-1">
-        
+
         {/* Model Visualization block */}
         <main className="w-full bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col shrink-0">
 
@@ -1182,11 +1263,10 @@ function Visualizer({ onNavigateAdmin }) {
                     {selectedMember.variable_groups.map((group, idx) => (
                       <label
                         key={idx}
-                        className={`flex items-center justify-between px-3 py-1.5 rounded-lg cursor-pointer text-xs font-medium transition-all ${
-                          selectedGroup?.file_path === group.file_path
-                            ? 'bg-sky-500/10 text-sky-400 border-sky-500/30'
-                            : 'text-slate-400 hover:text-slate-200 border border-transparent hover:bg-slate-900/60'
-                        }`}
+                        className={`flex items-center justify-between px-3 py-1.5 rounded-lg cursor-pointer text-xs font-medium transition-all ${selectedGroup?.file_path === group.file_path
+                          ? 'bg-sky-500/10 text-sky-400 border-sky-500/30'
+                          : 'text-slate-400 hover:text-slate-200 border border-transparent hover:bg-slate-900/60'
+                          }`}
                       >
                         <div className="flex items-center gap-2">
                           <input
@@ -1217,21 +1297,19 @@ function Visualizer({ onNavigateAdmin }) {
               {availableContourVars.length > 0 && (
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Variable</label>
-                  <div className={`grid ${
-                    availableContourVars.length === 3
-                      ? 'grid-cols-3'
-                      : availableContourVars.length === 2
-                        ? 'grid-cols-2'
-                        : 'grid-cols-1'
-                  } gap-1 bg-slate-900/60 p-0.5 rounded-xl border border-slate-800/60`}>
+                  <div className={`grid ${availableContourVars.length === 3
+                    ? 'grid-cols-3'
+                    : availableContourVars.length === 2
+                      ? 'grid-cols-2'
+                      : 'grid-cols-1'
+                    } gap-1 bg-slate-900/60 p-0.5 rounded-xl border border-slate-800/60`}>
                     {hasTemp && (
                       <button
                         onClick={() => setSelectedVariable('temp')}
-                        className={`py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
-                          selectedVariable === 'temp'
-                            ? 'bg-slate-800 text-sky-400 shadow shadow-sky-500/10'
-                            : 'text-slate-400 hover:text-slate-200'
-                        }`}
+                        className={`py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${selectedVariable === 'temp'
+                          ? 'bg-slate-800 text-sky-400 shadow shadow-sky-500/10'
+                          : 'text-slate-400 hover:text-slate-200'
+                          }`}
                       >
                         <Thermometer className="w-3.5 h-3.5" /> Temp
                       </button>
@@ -1239,11 +1317,10 @@ function Visualizer({ onNavigateAdmin }) {
                     {hasSalt && (
                       <button
                         onClick={() => setSelectedVariable('salt')}
-                        className={`py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
-                          selectedVariable === 'salt'
-                            ? 'bg-slate-800 text-teal-400 shadow shadow-teal-500/10'
-                            : 'text-slate-400 hover:text-slate-200'
-                        }`}
+                        className={`py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${selectedVariable === 'salt'
+                          ? 'bg-slate-800 text-teal-400 shadow shadow-teal-500/10'
+                          : 'text-slate-400 hover:text-slate-200'
+                          }`}
                       >
                         <Droplets className="w-3.5 h-3.5" /> Salt
                       </button>
@@ -1254,11 +1331,10 @@ function Visualizer({ onNavigateAdmin }) {
                           setSelectedVariable('zeta');
                           setCurrentDepthIndex(0);
                         }}
-                        className={`py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
-                          selectedVariable === 'zeta'
-                            ? 'bg-slate-800 text-emerald-400 shadow shadow-emerald-500/10'
-                            : 'text-slate-400 hover:text-slate-200'
-                        }`}
+                        className={`py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${selectedVariable === 'zeta'
+                          ? 'bg-slate-800 text-emerald-400 shadow shadow-emerald-500/10'
+                          : 'text-slate-400 hover:text-slate-200'
+                          }`}
                       >
                         <Waves className="w-3.5 h-3.5" /> SSH
                       </button>
@@ -1348,11 +1424,10 @@ function Visualizer({ onNavigateAdmin }) {
             {/* Visibility Controls */}
             <div className="space-y-2">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Map Layers</span>
-              <div className={`grid ${
-                (hasContoursOption ? 1 : 0) + (hasCurrents ? 1 : 0) + 1 >= 3
-                  ? 'grid-cols-3'
-                  : 'grid-cols-2'
-              } gap-2`}>
+              <div className={`grid ${(hasContoursOption ? 1 : 0) + (hasCurrents ? 1 : 0) + 1 >= 3
+                ? 'grid-cols-3'
+                : 'grid-cols-2'
+                } gap-2`}>
                 {hasContoursOption && (
                   <label className="flex items-center justify-center gap-2 cursor-pointer text-xs font-semibold py-2 rounded-xl bg-slate-900/60 border border-slate-850 hover:border-slate-750 transition-colors text-slate-300">
                     <input
@@ -1391,9 +1466,8 @@ function Visualizer({ onNavigateAdmin }) {
             <div className="border-t border-slate-900 pt-3">
               <button
                 onClick={() => setShowSettings(!showSettings)}
-                className={`flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider transition-all ${
-                  showSettings ? 'text-sky-400' : 'text-slate-400 hover:text-slate-300'
-                }`}
+                className={`flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider transition-all ${showSettings ? 'text-sky-400' : 'text-slate-400 hover:text-slate-300'
+                  }`}
               >
                 <Settings className={`w-3.5 h-3.5 ${showSettings ? 'animate-[spin_8s_linear_infinite]' : ''}`} /> Configure Engine
               </button>
@@ -1424,7 +1498,7 @@ function Visualizer({ onNavigateAdmin }) {
       {/* 4b. Depths vertically on the right */}
       {selectedMember && metadata && (
         <section className="absolute right-6 bottom-[54px] bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-3 rounded-2xl shadow-2xl z-10 flex flex-col items-center gap-2 pointer-events-auto">
-          <div 
+          <div
             className="text-[9px] font-bold text-slate-500 uppercase tracking-wider text-center pb-1 border-b border-slate-900 w-full"
           >
             Depth
@@ -1438,15 +1512,13 @@ function Visualizer({ onNavigateAdmin }) {
                   key={d}
                   disabled={isZeta}
                   onClick={() => setCurrentDepthIndex(idx)}
-                  className={`w-12 py-2 rounded-xl text-[11px] font-bold border transition-all ${
-                    isSelected
-                      ? 'bg-sky-500/10 text-sky-400 border-sky-500/50'
-                      : 'bg-slate-900/40 text-slate-400 border-slate-800'
-                  } ${
-                    isZeta
+                  className={`w-12 py-2 rounded-xl text-[11px] font-bold border transition-all ${isSelected
+                    ? 'bg-sky-500/10 text-sky-400 border-sky-500/50'
+                    : 'bg-slate-900/40 text-slate-400 border-slate-800'
+                    } ${isZeta
                       ? 'opacity-40 cursor-not-allowed border-slate-800/20'
                       : 'hover:text-slate-200 hover:border-slate-700'
-                  }`}
+                    }`}
                   title={d === 0 ? 'Surface (0m)' : `${Math.abs(d)}m`}
                 >
                   {d === 0 ? '0m' : `${Math.abs(d)}m`}
@@ -1471,9 +1543,8 @@ function Visualizer({ onNavigateAdmin }) {
             </button>
             <button
               onClick={() => setIsPlaying(!isPlaying)}
-              className={`p-2 rounded-xl transition-all ${
-                isPlaying ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/20' : 'text-slate-300 hover:bg-slate-800/50'
-              }`}
+              className={`p-2 rounded-xl transition-all ${isPlaying ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/20' : 'text-slate-300 hover:bg-slate-800/50'
+                }`}
               title={isPlaying ? 'Pause' : 'Play'}
             >
               {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
@@ -1541,11 +1612,10 @@ function Visualizer({ onNavigateAdmin }) {
                 <button
                   key={speed}
                   onClick={() => setPlaybackSpeed(speed)}
-                  className={`px-1.5 py-0.5 rounded text-[9px] font-mono transition-all ${
-                    playbackSpeed === speed
-                      ? 'bg-slate-800 text-sky-400 shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
+                  className={`px-1.5 py-0.5 rounded text-[9px] font-mono transition-all ${playbackSpeed === speed
+                    ? 'bg-slate-800 text-sky-400 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                    }`}
                 >
                   {speed}fps
                 </button>
@@ -1568,7 +1638,7 @@ function Visualizer({ onNavigateAdmin }) {
       {/* 6. Time Series Modal */}
       {clickedPoint && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-[fadeIn_0.15s_ease-out]">
-          <div 
+          <div
             className="w-full max-w-[640px] bg-slate-900/95 border border-slate-800/80 backdrop-blur-xl rounded-3xl p-6 shadow-2xl space-y-4 text-slate-100 relative pointer-events-auto"
             onClick={(e) => e.stopPropagation()}
           >
@@ -1579,12 +1649,12 @@ function Visualizer({ onNavigateAdmin }) {
                   <Activity className="w-4 h-4 text-sky-400 animate-pulse" /> Time Series Analysis
                 </h3>
                 <p className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
-                  <MapPin className="w-3 h-3 text-emerald-400" /> 
-                  Lat: <span className="font-mono text-slate-300">{clickedPoint.lat.toFixed(4)}</span>, 
+                  <MapPin className="w-3 h-3 text-emerald-400" />
+                  Lat: <span className="font-mono text-slate-300">{clickedPoint.lat.toFixed(4)}</span>,
                   Lng: <span className="font-mono text-slate-300">{clickedPoint.lng.toFixed(4)}</span>
                 </p>
               </div>
-              <button 
+              <button
                 onClick={() => setClickedPoint(null)}
                 className="p-1.5 bg-slate-800/50 hover:bg-slate-800 border border-slate-700/50 hover:border-slate-600 text-slate-400 hover:text-slate-200 rounded-xl transition-all"
                 title="Close Panel"
@@ -1606,18 +1676,17 @@ function Visualizer({ onNavigateAdmin }) {
                       <button
                         key={v}
                         onClick={() => setTimeSeriesVariable(v)}
-                        className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all ${
-                          timeSeriesVariable === v
-                            ? `bg-slate-900 ${activeColor} border border-slate-800`
-                            : 'text-slate-500 hover:text-slate-300 border border-transparent'
-                        }`}
+                        className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all ${timeSeriesVariable === v
+                          ? `bg-slate-900 ${activeColor} border border-slate-800`
+                          : 'text-slate-500 hover:text-slate-300 border border-transparent'
+                          }`}
                       >
                         {label}
                       </button>
                     );
                   })}
               </div>
-              
+
               {/* Depth indicator if not zeta */}
               {timeSeriesVariable !== 'zeta' && metadata && (
                 <div className="text-[10px] text-slate-400 bg-slate-900/60 border border-slate-850/40 px-3 py-1.5 rounded-xl">
@@ -1761,7 +1830,7 @@ function TimeSeriesGraph({ data, loading }) {
   const handleMouseMove = (e) => {
     const svgRect = e.currentTarget.getBoundingClientRect();
     const mouseX = e.clientX - svgRect.left;
-    
+
     // Find closest point by x coordinate
     let closest = null;
     let minDiff = Infinity;
@@ -1782,39 +1851,39 @@ function TimeSeriesGraph({ data, loading }) {
 
   return (
     <div className="relative">
-      <svg 
-        width="100%" 
-        height={height} 
-        viewBox={`0 0 ${width} ${height}`} 
+      <svg
+        width="100%"
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
         className="overflow-visible select-none"
         onMouseMove={handleMouseMove}
         onMouseLeave={() => setHoveredPoint(null)}
       >
         <defs>
           <linearGradient id="chart-glow" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.4"/>
-            <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0"/>
+            <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.4" />
+            <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0" />
           </linearGradient>
         </defs>
 
         {/* Gridlines */}
         {yTicks.map((tick, i) => (
           <g key={i}>
-            <line 
-              x1={paddingLeft} 
-              y1={tick.y} 
-              x2={width - paddingRight} 
-              y2={tick.y} 
-              stroke="#64748b" 
+            <line
+              x1={paddingLeft}
+              y1={tick.y}
+              x2={width - paddingRight}
+              y2={tick.y}
+              stroke="#64748b"
               strokeWidth="1"
               strokeDasharray="3,3"
               className="opacity-20"
             />
-            <text 
-              x={paddingLeft - 8} 
-              y={tick.y + 4} 
-              fill="#cbd5e1" 
-              fontSize="9" 
+            <text
+              x={paddingLeft - 8}
+              y={tick.y + 4}
+              fill="#cbd5e1"
+              fontSize="9"
               textAnchor="end"
               className="font-mono font-medium"
             >
@@ -1825,12 +1894,12 @@ function TimeSeriesGraph({ data, loading }) {
 
         {/* X axis labels */}
         {xTicks.map((tick, i) => (
-          <text 
+          <text
             key={i}
-            x={tick.x} 
-            y={height - paddingBottom + 16} 
-            fill="#cbd5e1" 
-            fontSize="9" 
+            x={tick.x}
+            y={height - paddingBottom + 16}
+            fill="#cbd5e1"
+            fontSize="9"
             textAnchor="middle"
             className="font-medium"
           >
@@ -1841,17 +1910,17 @@ function TimeSeriesGraph({ data, loading }) {
         {/* Shaded Area under path */}
         {points.length > 1 && (
           <path
-            d={`${pathD} L ${points[points.length-1].x} ${paddingTop + chartHeight} L ${points[0].x} ${paddingTop + chartHeight} Z`}
+            d={`${pathD} L ${points[points.length - 1].x} ${paddingTop + chartHeight} L ${points[0].x} ${paddingTop + chartHeight} Z`}
             fill="url(#chart-glow)"
           />
         )}
 
         {/* SVG Line path */}
-        <path 
-          d={pathD} 
-          fill="none" 
-          stroke="#0ea5e9" 
-          strokeWidth="2.5" 
+        <path
+          d={pathD}
+          fill="none"
+          stroke="#0ea5e9"
+          strokeWidth="2.5"
           strokeLinecap="round"
           strokeLinejoin="round"
           className="drop-shadow-[0_2px_8px_rgba(14,165,233,0.3)]"
@@ -1861,23 +1930,23 @@ function TimeSeriesGraph({ data, loading }) {
         {hoveredPoint && (
           <g>
             {/* Vertical Tracker Line */}
-            <line 
-              x1={hoveredPoint.x} 
-              y1={paddingTop} 
-              x2={hoveredPoint.x} 
-              y2={paddingTop + chartHeight} 
-              stroke="#0ea5e9" 
+            <line
+              x1={hoveredPoint.x}
+              y1={paddingTop}
+              x2={hoveredPoint.x}
+              y2={paddingTop + chartHeight}
+              stroke="#0ea5e9"
               strokeWidth="1.5"
               strokeDasharray="2,2"
               className="opacity-50"
             />
             {/* Hover Circle Marker */}
-            <circle 
-              cx={hoveredPoint.x} 
-              cy={hoveredPoint.y} 
-              r="5" 
-              fill="#0ea5e9" 
-              stroke="#ffffff" 
+            <circle
+              cx={hoveredPoint.x}
+              cy={hoveredPoint.y}
+              r="5"
+              fill="#0ea5e9"
+              stroke="#ffffff"
               strokeWidth="1.5"
               className="drop-shadow-[0_0_6px_rgba(14,165,233,0.8)]"
             />
@@ -1887,10 +1956,10 @@ function TimeSeriesGraph({ data, loading }) {
 
       {/* Floating HTML Tooltip inside the card */}
       {hoveredPoint && (
-        <div 
+        <div
           className="absolute z-20 pointer-events-none bg-slate-950/95 border border-slate-700/80 backdrop-blur rounded-xl p-2.5 shadow-2xl text-xs flex flex-col gap-1 text-slate-100 transition-all duration-75"
-          style={{ 
-            left: `${(hoveredPoint.x / width) * 100}%`, 
+          style={{
+            left: `${(hoveredPoint.x / width) * 100}%`,
             top: `${(hoveredPoint.y / height) * 100 - 65}%`,
             transform: 'translateX(-50%)'
           }}
@@ -1907,7 +1976,7 @@ function TimeSeriesGraph({ data, loading }) {
 
 export default function App() {
   const [path, setPath] = useState(window.location.pathname);
-  
+
   useEffect(() => {
     const handlePopState = () => {
       setPath(window.location.pathname);
@@ -1926,6 +1995,6 @@ export default function App() {
   if (isAdmin) {
     return <Admin onBack={() => navigate(window.location.pathname.includes('/ocean_model_visualiser/') ? '/ocean_model_visualiser/' : '/')} />;
   }
-  
+
   return <Visualizer onNavigateAdmin={() => navigate(window.location.pathname.includes('/ocean_model_visualiser/') ? '/ocean_model_visualiser/admin' : '/admin')} />;
 }
