@@ -9,8 +9,8 @@ services:
       - mongodb_data:/data/db
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: ocean-backend
     restart: always
     ports:
@@ -18,11 +18,28 @@ services:
     environment:
       - MONGODB_URL=mongodb://mongodb:27017
     volumes:
-    # Location on server : Location in container (Leave this as /data/)
       - /mnt/ocims-somisana/public-facing/:/data/
+      - cache_data:/app/.cache
     depends_on:
       - mongodb
+
+  cache-warmer:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: ocean-cache-warmer
+    restart: always
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017
+    command: python3 -c "import time, subprocess; [(subprocess.run(['python3', '-m', 'backend.cache_warmer']), time.sleep(3600)) for _ in iter(int, 1)]"
+    volumes:
+      - /mnt/ocims-somisana/public-facing/:/data/
+      - cache_data:/app/.cache
+    depends_on:
+      - backend
 
 volumes:
   mongodb_data:
     name: ocean_model_visualiser_mongodb_data
+  cache_data:
+    name: ocean_model_visualiser_cache_data

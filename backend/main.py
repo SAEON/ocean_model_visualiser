@@ -23,8 +23,9 @@ from shapely.geometry import Polygon, MultiPolygon, mapping
 from shapely.validation import make_valid
 from bson import ObjectId
 
-# Database imports
+# Database & Cache Warmer imports
 from backend.database import products_collection, members_collection, users_collection
+from backend.cache_warmer import warm_dataset
 from backend.schemas import (
     ProductCreate,
     ProductResponse,
@@ -317,6 +318,19 @@ async def clear_cache():
     dataset_cache.clear()
     return {"status": "success", "message": "Backend dataset and contour/currents caches cleared"}
 
+@app.post("/api/warm_cache")
+@app.get("/api/warm_cache")
+async def warm_cache(file_path: Optional[str] = Query(None)):
+    if file_path:
+        asyncio.create_task(asyncio.to_thread(warm_dataset, file_path))
+        return {"status": "started", "message": f"Cache warming started in background for {os.path.basename(file_path)}"}
+    else:
+        import glob
+        nc_files = glob.glob(os.path.join(os.getcwd(), "*.nc"))
+        for fpath in nc_files:
+            asyncio.create_task(asyncio.to_thread(warm_dataset, fpath))
+        return {"status": "started", "message": f"Cache warming started in background for {len(nc_files)} datasets"}
+
 # Authentication Endpoints
 @app.post("/api/auth/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
@@ -362,7 +376,7 @@ def compute_contours_sync(file_path: Optional[str], variable: str, time_idx: int
     cache_dir = os.path.join(os.getcwd(), ".cache", "contours")
     os.makedirs(cache_dir, exist_ok=True)
     file_basename = os.path.basename(file_path or 'default')
-    cache_filename = f"{file_basename}_{variable}_{depth}_{time_idx}_tol{tolerance}_{int(loaded_time)}.json"
+    cache_filename = f"{file_basename}_{variable}_{depth}_{time_idx}_tol{tolerance}.json"
     disk_cache_path = os.path.join(cache_dir, cache_filename)
 
     if os.path.exists(disk_cache_path):
@@ -554,7 +568,7 @@ def compute_currents_sync(file_path: Optional[str], dataset, meta, time_idx: int
     cache_dir = os.path.join(os.getcwd(), ".cache", "currents")
     os.makedirs(cache_dir, exist_ok=True)
     file_basename = os.path.basename(file_path or 'default')
-    cache_filename = f"{file_basename}_curr_d{depth}_t{time_idx}_ds{downsample}_{int(loaded_time)}.json"
+    cache_filename = f"{file_basename}_curr_d{depth}_t{time_idx}_ds{downsample}.json"
     disk_cache_path = os.path.join(cache_dir, cache_filename)
 
     if os.path.exists(disk_cache_path):
