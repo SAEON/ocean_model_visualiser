@@ -149,7 +149,7 @@ function Visualizer({ onNavigateAdmin }) {
   const [targetMaxPixels, setTargetMaxPixels] = useState(40);
   const [downsampleRate, setDownsampleRate] = useState(3);
   const [simplification, setSimplification] = useState(0.001);
-  const [isPanelOpen, setIsPanelOpen] = useState(true);
+  const [isPanelOpen, setIsPanelOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 640 : false);
   const [isDepthOpen, setIsDepthOpen] = useState(false);
 
   // Grid Points & Time Series States
@@ -1127,7 +1127,7 @@ function Visualizer({ onNavigateAdmin }) {
         </div>
       )}
       {selectedMember && metadata && showContours && (
-        <section className="absolute bottom-[135px] sm:bottom-[54px] left-3 sm:left-6 w-16 sm:w-20 h-64 sm:h-76 bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-2.5 sm:p-3.5 rounded-2xl shadow-2xl z-10 flex flex-col items-center justify-between pointer-events-auto">
+        <section className="absolute bottom-[68px] sm:bottom-[132px] lg:bottom-[54px] left-3 sm:left-6 w-16 sm:w-20 h-64 sm:h-76 bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-2.5 sm:p-3.5 rounded-2xl shadow-2xl z-10 flex flex-col items-center justify-between pointer-events-auto">
           {/* Label at the top */}
           <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider text-center truncate max-w-full pb-1 border-b border-slate-900 w-full">
             {selectedVariable === 'temp' ? 'Temp' : selectedVariable === 'salt' ? 'Salt' : 'SSH'}
@@ -1171,7 +1171,7 @@ function Visualizer({ onNavigateAdmin }) {
 
       {/* 4.5. Current Vector Scale Legend */}
       {selectedMember && metadata && showCurrents && (
-        <section className={`absolute bottom-[135px] sm:bottom-[54px] ${showContours ? 'left-22 sm:left-28' : 'left-3 sm:left-6'} bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-2.5 sm:p-3.5 rounded-2xl shadow-2xl z-10 flex flex-col gap-1.5 sm:gap-2 pointer-events-auto transition-all`}>
+        <section className={`absolute bottom-[68px] sm:bottom-[132px] lg:bottom-[54px] ${showContours ? 'left-22 sm:left-28' : 'left-3 sm:left-6'} bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-2.5 sm:p-3.5 rounded-2xl shadow-2xl z-10 flex flex-col gap-1.5 sm:gap-2 pointer-events-auto transition-all`}>
           {/* Legend Title */}
           <div className="flex items-center justify-between border-b border-slate-850/60 pb-1 gap-2 sm:gap-4">
             <span className="text-[9px] sm:text-[10px] font-bold text-slate-300 uppercase tracking-wider">Vector Scale</span>
@@ -1213,23 +1213,26 @@ function Visualizer({ onNavigateAdmin }) {
         </section>
       )}
 
-      {/* 3. Left Sidebar Control Panel Stack */}
-      <div className={`absolute top-[72px] sm:top-[106px] left-3 sm:left-6 w-[calc(100vw-24px)] sm:w-96 z-20 flex flex-col gap-2 sm:gap-4 pointer-events-auto transition-all duration-300 ${isPanelOpen ? 'max-h-[calc(100vh-220px)] sm:max-h-[calc(100vh-186px)] overflow-y-auto pr-1' : 'max-h-12 overflow-hidden'}`}>
+      {/* 3. Left Sidebar & Top Control Panel Stack */}
+      <div className={`absolute top-[72px] sm:top-[106px] left-3 sm:left-6 w-[calc(100vw-24px)] sm:w-auto lg:w-96 z-20 flex flex-col sm:flex-row lg:flex-col sm:items-start gap-2 sm:gap-4 pointer-events-auto transition-all duration-300 ${isPanelOpen ? 'max-h-[calc(100vh-220px)] sm:max-h-[calc(100vh-186px)] lg:max-h-[calc(100vh-160px)] overflow-y-auto overflow-x-hidden pr-1' : 'max-h-12 sm:max-h-none overflow-hidden sm:overflow-visible'}`}>
         
         {/* Mobile Collapse Toggle Bar (Visible on mobile) */}
         <button
           onClick={() => setIsPanelOpen(!isPanelOpen)}
-          className="sm:hidden w-full bg-slate-950/90 border border-slate-800/80 backdrop-blur-lg px-4 py-2.5 rounded-2xl flex items-center justify-between text-xs font-bold text-slate-200 shadow-xl shrink-0"
+          className="sm:hidden w-full bg-slate-950/95 border border-slate-800/90 backdrop-blur-xl px-4 py-3 rounded-2xl flex items-center justify-between text-xs font-bold text-slate-100 shadow-2xl shrink-0 active:scale-[0.99] transition-all"
         >
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
             <SlidersHorizontal className="w-4 h-4 text-sky-400" />
-            <span>Control Panel</span>
+            <span className="tracking-wide">Control Panel</span>
           </div>
-          {isPanelOpen ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+          <div className="flex items-center gap-1.5 text-sky-400 font-bold text-[11px] bg-sky-950/80 border border-sky-800/60 px-2.5 py-1 rounded-xl shadow-sm">
+            <span>{isPanelOpen ? 'Hide Menu' : 'Open Menu'}</span>
+            {isPanelOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5 animate-bounce" />}
+          </div>
         </button>
 
         {/* Model Visualization block */}
-        <main className="w-full bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col shrink-0">
+        <main className="w-full sm:w-96 bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col shrink-0">
 
           <div className="border-b border-slate-900/60 px-5 py-4 flex items-center justify-between bg-slate-950/40">
             <div className="flex items-center gap-2">
@@ -1435,18 +1438,20 @@ function Visualizer({ onNavigateAdmin }) {
           )}
         </main>
 
-        {/* 4a. Layer options & configure engine (Stacked under main panel) */}
+        {/* 4a. Map Layers Options (Appears to the right of Model Visualization block on tablet only, stacked on laptop/desktop) */}
         {selectedMember && metadata && (
-          <section className="w-full bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-4 rounded-2xl shadow-2xl space-y-4 shrink-0">
-            {/* Visibility Controls */}
+          <section className="w-full sm:w-auto sm:min-w-[280px] lg:w-full bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-3 sm:p-4 rounded-2xl shadow-2xl space-y-3 shrink-0">
             <div className="space-y-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Map Layers</span>
+              <div className="flex items-center justify-between border-b border-slate-900/80 pb-1.5">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Map Layers</span>
+                <span className="text-[9px] font-mono text-sky-400 bg-sky-950/60 border border-sky-800/50 px-1.5 py-0.5 rounded-md">Overlays</span>
+              </div>
               <div className={`grid ${(hasContoursOption ? 1 : 0) + (hasCurrents ? 1 : 0) + 1 >= 3
-                ? 'grid-cols-3'
-                : 'grid-cols-2'
+                ? 'grid-cols-3 sm:flex sm:flex-wrap lg:grid lg:grid-cols-3'
+                : 'grid-cols-2 sm:flex sm:flex-wrap lg:grid lg:grid-cols-2'
                 } gap-2`}>
                 {hasContoursOption && (
-                  <label className="flex items-center justify-center gap-2 cursor-pointer text-xs font-semibold py-2 rounded-xl bg-slate-900/60 border border-slate-850 hover:border-slate-750 transition-colors text-slate-300">
+                  <label className="flex items-center justify-center gap-2 cursor-pointer text-xs font-semibold py-2 px-3 rounded-xl bg-slate-900/60 border border-slate-850 hover:border-slate-750 transition-colors text-slate-300">
                     <input
                       type="checkbox"
                       checked={showContours}
@@ -1457,7 +1462,7 @@ function Visualizer({ onNavigateAdmin }) {
                   </label>
                 )}
                 {hasCurrents && (
-                  <label className="flex items-center justify-center gap-2 cursor-pointer text-xs font-semibold py-2 rounded-xl bg-slate-900/60 border border-slate-850 hover:border-slate-750 transition-colors text-slate-300">
+                  <label className="flex items-center justify-center gap-2 cursor-pointer text-xs font-semibold py-2 px-3 rounded-xl bg-slate-900/60 border border-slate-850 hover:border-slate-750 transition-colors text-slate-300">
                     <input
                       type="checkbox"
                       checked={showCurrents}
@@ -1467,7 +1472,7 @@ function Visualizer({ onNavigateAdmin }) {
                     Currents
                   </label>
                 )}
-                <label className="flex items-center justify-center gap-2 cursor-pointer text-xs font-semibold py-2 rounded-xl bg-slate-900/60 border border-slate-850 hover:border-slate-750 transition-colors text-slate-300">
+                <label className="flex items-center justify-center gap-2 cursor-pointer text-xs font-semibold py-2 px-3 rounded-xl bg-slate-900/60 border border-slate-850 hover:border-slate-750 transition-colors text-slate-300">
                   <input
                     type="checkbox"
                     checked={showPoints}
@@ -1478,14 +1483,13 @@ function Visualizer({ onNavigateAdmin }) {
                 </label>
               </div>
             </div>
-
           </section>
         )}
       </div>
 
       {/* 4b. Depths vertically on the right */}
       {selectedMember && metadata && (
-        <section className="absolute right-3 sm:right-6 bottom-[135px] sm:bottom-[54px] bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-2 sm:p-3 rounded-2xl shadow-2xl z-10 flex flex-col items-center gap-1.5 sm:gap-2 pointer-events-auto transition-all">
+        <section className="absolute right-3 sm:right-6 bottom-[68px] sm:bottom-[132px] lg:bottom-[54px] bg-slate-950/85 border border-slate-800/80 backdrop-blur-lg p-2 sm:p-3 rounded-2xl shadow-2xl z-10 flex flex-col items-center gap-1.5 sm:gap-2 pointer-events-auto transition-all">
           <button
             onClick={() => setIsDepthOpen(!isDepthOpen)}
             className="w-full flex items-center justify-between gap-1.5 text-[8px] sm:text-[9px] font-bold text-slate-400 uppercase tracking-wider text-center pb-1 border-b border-slate-900 focus:outline-none"
@@ -1618,16 +1622,6 @@ function Visualizer({ onNavigateAdmin }) {
           </div>
         </section>
       )}
-
-      {/* 5. Live Zoom Level Indicator (Top Right) */}
-      <div className="absolute top-[72px] sm:top-[106px] right-3 sm:right-6 bg-slate-950/85 border border-slate-800/80 backdrop-blur-md px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-xl sm:rounded-2xl shadow-xl z-20 pointer-events-auto flex items-center gap-1.5 sm:gap-2">
-        <span className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-wider">Zoom</span>
-        <span className="text-[10px] sm:text-xs font-mono font-bold text-sky-400 bg-sky-950/60 border border-sky-800/50 px-1.5 py-0.5 sm:px-2 rounded-md sm:rounded-lg">
-          {viewState?.zoom ? viewState.zoom.toFixed(2) : '5.80'}
-        </span>
-      </div>
-
-
 
       {/* 6. Time Series Modal */}
       {clickedPoint && (
