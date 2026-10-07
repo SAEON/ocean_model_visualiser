@@ -1,6 +1,6 @@
 services:
   mongodb:
-    image: mongo:4.4.26
+    image: mongo:6.0
     container_name: ocean-mongodb
     restart: always
     ports:
@@ -14,11 +14,11 @@ services:
     container_name: ocean-backend
     restart: always
     ports:
-      - "8080:8001"
+      - "${PORT:-8080}:8001"
     environment:
       - MONGODB_URL=mongodb://mongodb:27017
     volumes:
-      - /mnt/ocims-somisana/public-facing/:/data/
+      - ${DATA_DIR:-/mnt/ocims-somisana/public-facing/}:/data/
       - cache_data:/app/.cache
     depends_on:
       - mongodb
@@ -33,7 +33,7 @@ services:
       - MONGODB_URL=mongodb://mongodb:27017
     command: python3 -c "import time, subprocess; [(subprocess.run(['python3', '-m', 'backend.cache_warmer']), time.sleep(3600)) for _ in iter(int, 1)]"
     volumes:
-      - /mnt/ocims-somisana/public-facing/:/data/
+      - ${DATA_DIR:-/mnt/ocims-somisana/public-facing/}:/data/
       - cache_data:/app/.cache
     depends_on:
       - backend

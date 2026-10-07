@@ -3,35 +3,38 @@ import asyncio
 import getpass
 import sys
 import os
+import argparse
 from datetime import datetime
 
 # Ensure project root is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from backend.database import users_collection
-from backend.main import get_password_hash
+from backend.auth import get_password_hash
 
 
-async def create_user():
+async def create_user(username: str = None, password: str = None):
     print("\n==========================================")
     print("🔐 SOMISANA Admin User Management")
     print("==========================================\n")
 
     try:
-        username = input("Enter admin username: ").strip()
         if not username:
-            print("❌ Error: Username cannot be empty.")
-            sys.exit(1)
+            username = input("Enter admin username: ").strip()
+            if not username:
+                print("❌ Error: Username cannot be empty.")
+                sys.exit(1)
 
-        password = getpass.getpass("Enter admin password: ")
         if not password:
-            print("❌ Error: Password cannot be empty.")
-            sys.exit(1)
+            password = getpass.getpass("Enter admin password: ")
+            if not password:
+                print("❌ Error: Password cannot be empty.")
+                sys.exit(1)
 
-        password_confirm = getpass.getpass("Confirm admin password: ")
-        if password != password_confirm:
-            print("❌ Error: Passwords do not match.")
-            sys.exit(1)
+            password_confirm = getpass.getpass("Confirm admin password: ")
+            if password != password_confirm:
+                print("❌ Error: Passwords do not match.")
+                sys.exit(1)
 
         hashed = get_password_hash(password)
         existing_user = await users_collection.find_one({"username": username})
@@ -81,4 +84,9 @@ async def create_user():
 
 
 if __name__ == "__main__":
-    asyncio.run(create_user())
+    parser = argparse.ArgumentParser(description="Create or update an admin user for Ocean Model Visualiser.")
+    parser.add_argument("-u", "--username", help="Admin username", type=str)
+    parser.add_argument("-p", "--password", help="Admin password", type=str)
+    args = parser.parse_args()
+
+    asyncio.run(create_user(args.username, args.password))

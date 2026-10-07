@@ -401,11 +401,10 @@ function Visualizer({ onNavigateAdmin }) {
             transitionDuration: 1000
           }));
         }
-        // Clear caches on group change
+        // Clear local component state caches on group change
         setContourCache({});
         setCurrentsCache({});
         fetchingFrameKeysRef.current.clear();
-        fetch(`${API_URL}/api/clear_cache`, { method: 'POST' }).catch(() => { });
       } else {
         console.error("Failed to load metadata for file:", group.file_path);
       }

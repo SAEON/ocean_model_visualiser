@@ -11,7 +11,7 @@ export default defineConfig({
     proxy: {
       // Catch any request ending in /api (with or without base path subpath)
       '^/.*api': {
-        target: 'http://127.0.0.1:8080',
+        target: process.env.VITE_BACKEND_URL || `http://127.0.0.1:${process.env.PORT || 8081}`,
         changeOrigin: true,
         secure: false,
         rewrite: (path) => path.replace(/^.*\/api/, '/api')

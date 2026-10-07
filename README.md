@@ -7,14 +7,14 @@ A high-performance interactive GIS visualisation dashboard for regional oceanogr
 ## 🏗️ System Architecture
 
 1. **Database**: MongoDB — Stores product regions, model members, and variable group configurations.
-2. **Backend**: FastAPI / Python (Containerised) — Performs lazy-load operations on NetCDF files (`xarray`), computes dynamic percentiles (`5%/95%` scaling), extracts contours, and generates velocity vector fields.
+2. **Backend**: FastAPI / Python (Containerised) — Performs lazy-load operations on NetCDF files (`xarray`), computes dynamic percentiles, extracts contours using a dedicated process pool, and generates velocity vector fields.
 3. **Frontend**: React / Vite / Deck.gl (Host-run) — Renders the interactive map interface, layers, timeline playback, and administrative dashboard.
 
 ---
 
 ## ⚙️ Prerequisites
 
-Ensure the deployment server has the following installed:
+Ensure the deployment environment has the following installed:
 - **Docker** & **Docker Compose (v2)**
 - **Node.js (v18+)** and **npm**
 
@@ -22,8 +22,16 @@ Ensure the deployment server has the following installed:
 
 ## 🚀 Deployment Steps
 
-### 1. Start the Backend and Database Services
-Build and start the containerised services (MongoDB and the FastAPI backend) in detached mode:
+### 1. Environment & Data Configuration
+Copy `.env.example` to `.env` if you wish to override local data paths:
+```bash
+cp .env.example .env
+```
+- **Local Machine**: Set `DATA_DIR=/home/dylan/srv/test_ocean_models/` and `PORT=8081` (or another port if 8080 is in use) in `.env`.
+- **Production Server**: Leave `DATA_DIR` and `PORT` unset or empty — `docker-compose.yml` defaults automatically to `/mnt/ocims-somisana/public-facing/` and port `8080`.
+
+### 2. Start Backend & Database Services
+Build and start containerised services (MongoDB, FastAPI backend, and Cache Warmer) in detached mode:
 ```bash
 docker compose up -d --build
 ```
@@ -36,22 +44,37 @@ docker compose up -d --build
   ```bash
   docker compose logs -f backend
   ```
-- **Custom Ports**: By default, MongoDB is exposed on port `27017` and the backend is exposed on port `8001`. You can customize these mappings by editing the `ports` sections in `docker-compose.yml`.
+- **Custom Ports**: By default, MongoDB is exposed on port `27017` and the backend is exposed on port `8080` (or your configured `${PORT}`). You can customize these mappings via `.env`.
 
-### 3. Start the Frontend Application
-The frontend resolves API requests dynamically. It detects the IP address or VPN hostname you use in your browser and automatically redirects data calls to the backend container on port `8001`.
+### 3. Create or Manage Admin Users
+Use the admin creation CLI tool to manage admin credentials.
+
+#### Interactive Mode (Prompted Username & Password)
+```bash
+docker exec -it ocean-backend python3 -m backend.create_admin_user
+```
+
+#### Non-Interactive Mode (Command Line Flags)
+```bash
+docker exec -it ocean-backend python3 -m backend.create_admin_user -u admin -p mysecretpassword
+```
+
+#### Local Execution (Without Docker)
+```bash
+.venv/bin/python -m backend.create_admin_user
+```
+
+### 4. Start the Frontend Application
+The frontend resolves API requests dynamically based on the browser address.
 
 #### Option A: Run in Development Mode
-Best for testing or lightweight VPN access:
 ```bash
 cd frontend
 npm install
 npm run dev -- --host --port 5173
 ```
-*Note: The `--host` flag is necessary to expose Vite to your VPN or local network.*
 
 #### Option B: Serve a Production Build
-For optimal performance, compile the assets and serve them via a static file server:
 ```bash
 cd frontend
 npm install
@@ -63,6 +86,5 @@ npx serve -s dist -l 5173
 
 ## 📂 Managing NetCDF Files
 
-- Place any NetCDF `.nc` files in the project root. The file paths can be resolved by the backend container using:
-  - `/home/dylan/srv/ocean_model_visualiser/filename.nc`
-- Add variables, titles, and NetCDF file paths via the **Admin Portal** link in the top right corner of the dashboard.
+- Place any NetCDF `.nc` files in your configured `DATA_DIR` (or root path).
+- Configure dataset variable groups, titles, and NetCDF file paths via the **Admin Portal** link in the top right corner of the dashboard interface.
