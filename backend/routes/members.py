@@ -6,7 +6,12 @@ from fastapi import APIRouter, HTTPException, Depends
 from backend.database import products_collection, members_collection
 from backend.auth import get_current_admin
 from backend.schemas import MemberCreate, MemberResponse, MemberUpdate, serialize_doc
-from backend.services.dataset_service import dataset_cache
+from backend.services.dataset_service import (
+    dataset_cache,
+    get_canonical_file_path,
+    resolve_depth_dimension,
+    resolve_time_dimension
+)
 
 router = APIRouter(prefix="/api", tags=["members"])
 
@@ -24,14 +29,8 @@ async def create_member(product_id: str, member: MemberCreate, current_user: dic
     processed_groups = []
     
     for group in member.variable_groups:
-        resolved_path = group.file_path
-        if not os.path.exists(resolved_path):
-            if resolved_path.startswith("/data/"):
-                fallback = os.path.join(os.getcwd(), os.path.basename(resolved_path))
-                if os.path.exists(fallback):
-                    resolved_path = fallback
-
-        if not os.path.exists(resolved_path):
+        canonical_path = get_canonical_file_path(group.file_path)
+        if not os.path.exists(canonical_path):
             raise HTTPException(
                 status_code=400,
                 detail=f"NetCDF file not found at path: {group.file_path}"
@@ -41,12 +40,14 @@ async def create_member(product_id: str, member: MemberCreate, current_user: dic
         group_time_steps = []
         
         try:
-            with xr.open_dataset(resolved_path) as test_ds:
-                if 'depth' in test_ds:
-                    group_depths = [float(d) for d in test_ds['depth'].values]
+            with xr.open_dataset(canonical_path) as test_ds:
+                depth_var = resolve_depth_dimension(test_ds)
+                if depth_var and depth_var in test_ds:
+                    group_depths = [float(d) for d in test_ds[depth_var].values]
                     
-                if 'time' in test_ds:
-                    raw_times = [str(t) for t in test_ds['time'].values]
+                time_var = resolve_time_dimension(test_ds)
+                if time_var and time_var in test_ds:
+                    raw_times = [str(t) for t in test_ds[time_var].values]
                     step = group.time_sampling if group.time_sampling and group.time_sampling > 0 else 1
                     group_time_steps = raw_times[::step]
         except Exception as e:
@@ -57,9 +58,13 @@ async def create_member(product_id: str, member: MemberCreate, current_user: dic
             
         group_depths.sort(reverse=True)
         
+        serialized_vars = [
+            v.model_dump() if hasattr(v, "model_dump") else (v.dict() if hasattr(v, "dict") else dict(v))
+            for v in group.variables
+        ]
         processed_groups.append({
             "name": group.name.strip(),
-            "variables": group.variables,
+            "variables": serialized_vars,
             "file_path": group.file_path,
             "depths": group_depths,
             "time_steps": group_time_steps,
@@ -130,14 +135,8 @@ async def update_member(member_id: str, member_update: MemberUpdate, current_use
         
     processed_groups = []
     for group in member_update.variable_groups:
-        resolved_path = group.file_path
-        if not os.path.exists(resolved_path):
-            if resolved_path.startswith("/data/"):
-                fallback = os.path.join(os.getcwd(), os.path.basename(resolved_path))
-                if os.path.exists(fallback):
-                    resolved_path = fallback
-
-        if not os.path.exists(resolved_path):
+        canonical_path = get_canonical_file_path(group.file_path)
+        if not os.path.exists(canonical_path):
             raise HTTPException(
                 status_code=400,
                 detail=f"NetCDF file not found at path: {group.file_path}"
@@ -147,12 +146,14 @@ async def update_member(member_id: str, member_update: MemberUpdate, current_use
         group_time_steps = []
         
         try:
-            with xr.open_dataset(resolved_path) as test_ds:
-                if 'depth' in test_ds:
-                    group_depths = [float(d) for d in test_ds['depth'].values]
+            with xr.open_dataset(canonical_path) as test_ds:
+                depth_var = resolve_depth_dimension(test_ds)
+                if depth_var and depth_var in test_ds:
+                    group_depths = [float(d) for d in test_ds[depth_var].values]
                     
-                if 'time' in test_ds:
-                    raw_times = [str(t) for t in test_ds['time'].values]
+                time_var = resolve_time_dimension(test_ds)
+                if time_var and time_var in test_ds:
+                    raw_times = [str(t) for t in test_ds[time_var].values]
                     step = group.time_sampling if group.time_sampling and group.time_sampling > 0 else 1
                     group_time_steps = raw_times[::step]
         except Exception as e:
@@ -163,9 +164,13 @@ async def update_member(member_id: str, member_update: MemberUpdate, current_use
             
         group_depths.sort(reverse=True)
         
+        serialized_vars = [
+            v.model_dump() if hasattr(v, "model_dump") else (v.dict() if hasattr(v, "dict") else dict(v))
+            for v in group.variables
+        ]
         processed_groups.append({
             "name": group.name.strip(),
-            "variables": group.variables,
+            "variables": serialized_vars,
             "file_path": group.file_path,
             "depths": group_depths,
             "time_steps": group_time_steps,

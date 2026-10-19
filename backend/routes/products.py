@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from backend.database import products_collection, members_collection
 from backend.auth import get_current_admin
 from backend.schemas import ProductCreate, ProductResponse, ProductUpdate, MemberResponse, serialize_doc
+from backend.services.dataset_service import get_canonical_file_path, resolve_coordinates
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 
@@ -90,26 +91,17 @@ async def derive_product_region(product_id: str, current_user: dict = Depends(ge
         raise HTTPException(status_code=400, detail="First member has no variable groups / file paths defined.")
         
     file_path = first_member["variable_groups"][0]["file_path"]
-    if not os.path.exists(file_path):
+    canonical_path = get_canonical_file_path(file_path)
+    if not os.path.exists(canonical_path):
         raise HTTPException(status_code=400, detail=f"Member NetCDF file not found at path: {file_path}")
         
     try:
-        with xr.open_dataset(file_path) as test_ds:
-            lon_var = None
-            lat_var = None
-            for name in ['lon_rho', 'nav_lon', 'lon']:
-                if name in test_ds:
-                    lon_var = name
-                    break
-            for name in ['lat_rho', 'nav_lat', 'lat']:
-                if name in test_ds:
-                    lat_var = name
-                    break
-                    
+        with xr.open_dataset(canonical_path) as test_ds:
+            lon_var, lat_var = resolve_coordinates(test_ds)
             if not lon_var or not lat_var:
                 raise HTTPException(
                     status_code=400, 
-                    detail=f"Could not find coordinate variables (e.g. lon_rho/lat_rho) in NetCDF file: {file_path}"
+                    detail=f"Could not find coordinate variables in NetCDF file: {file_path}"
                 )
                 
             lon = test_ds[lon_var].values
@@ -202,3 +194,11 @@ async def delete_product(product_id: str, current_user: dict = Depends(get_curre
         return {"message": "Product and associated members deleted successfully."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@router.post("/inspect_netcdf")
+@router.get("/inspect_netcdf")
+async def inspect_netcdf(file_path: str):
+    from backend.services.dataset_service import inspect_netcdf_file
+    if not file_path:
+        raise HTTPException(status_code=400, detail="file_path query parameter is required")
+    return inspect_netcdf_file(file_path)

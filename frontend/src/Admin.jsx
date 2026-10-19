@@ -16,10 +16,12 @@ import {
   Lock,
   User,
   ShieldCheck,
-  Key
+  Key,
+  Sparkles
 } from 'lucide-react';
 
 import { API_URL } from './config';
+import ColorSchemeSelector from './components/controls/ColorSchemeSelector';
 
 export default function Admin({ onBack }) {
   // Auth State
@@ -234,16 +236,6 @@ export default function Admin({ onBack }) {
     setEditVariableGroups(updated);
   };
 
-  const handleEditVariableChange = (groupIndex, variable) => {
-    const updated = [...editVariableGroups];
-    const vars = updated[groupIndex].variables;
-    if (vars.includes(variable)) {
-      updated[groupIndex].variables = vars.filter(v => v !== variable);
-    } else {
-      updated[groupIndex].variables = [...vars, variable];
-    }
-    setEditVariableGroups(updated);
-  };
 
   const handleEditPathChange = (groupIndex, path) => {
     const updated = [...editVariableGroups];
@@ -408,16 +400,6 @@ export default function Admin({ onBack }) {
     setVariableGroups(updated);
   };
 
-  const handleVariableChange = (groupIndex, variable) => {
-    const updated = [...variableGroups];
-    const vars = updated[groupIndex].variables;
-    if (vars.includes(variable)) {
-      updated[groupIndex].variables = vars.filter(v => v !== variable);
-    } else {
-      updated[groupIndex].variables = [...vars, variable];
-    }
-    setVariableGroups(updated);
-  };
 
   const handlePathChange = (groupIndex, path) => {
     const updated = [...variableGroups];
@@ -425,10 +407,150 @@ export default function Admin({ onBack }) {
     setVariableGroups(updated);
   };
 
-  const handleTimeSamplingChange = (groupIndex, value) => {
-    const updated = [...variableGroups];
+  const handleTimeSamplingChange = (groupIndex, value, isEdit = false) => {
+    const targetGroups = isEdit ? editVariableGroups : variableGroups;
+    const updated = [...targetGroups];
     updated[groupIndex].time_sampling = value;
-    setVariableGroups(updated);
+    if (isEdit) setEditVariableGroups(updated);
+    else setVariableGroups(updated);
+  };
+
+  const [inspectingIdx, setInspectingIdx] = useState(null);
+
+  const handleInspectNetcdf = async (groupIndex, isEdit = false) => {
+    const targetGroups = isEdit ? editVariableGroups : variableGroups;
+    const path = targetGroups[groupIndex]?.file_path?.trim();
+    if (!path) {
+      setErrorMessage('Please enter an absolute file path first before fetching variable data.');
+      return;
+    }
+    setInspectingIdx(groupIndex);
+    setErrorMessage('');
+    setSuccessMessage('');
+    try {
+      const res = await authFetch(`${API_URL}/api/products/inspect_netcdf?file_path=${encodeURIComponent(path)}`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const updated = [...targetGroups];
+        const groupedVars = [];
+        const vectorHandled = new Set();
+
+        for (const v of (data.variables || [])) {
+          const vLower = (v.nc_var || '').toLowerCase();
+          const isVector =
+            v.suggested_type === 'vector_pair' ||
+            ['u', 'v', 'water_u', 'water_v', 'u10', 'v10'].includes(vLower);
+
+          if (isVector) {
+            let uVar = v.nc_var;
+            let vVar = v.nc_var;
+            let pairId = 'currents';
+            let pairName = 'Ocean Currents';
+            let pairUnit = v.unit || 'm/s';
+
+            if (vLower === 'u' || vLower === 'v') {
+              uVar = 'u';
+              vVar = 'v';
+              pairId = 'currents';
+              pairName = 'Ocean Currents';
+            } else if (vLower === 'water_u' || vLower === 'water_v') {
+              uVar = 'water_u';
+              vVar = 'water_v';
+              pairId = 'currents';
+              pairName = 'Ocean Currents';
+            } else if (vLower === 'u10' || vLower === 'v10') {
+              uVar = 'u10';
+              vVar = 'v10';
+              pairId = 'wind';
+              pairName = 'Wind Velocity';
+            }
+
+            if (!vectorHandled.has(uVar) && !vectorHandled.has(vVar)) {
+              vectorHandled.add(uVar);
+              vectorHandled.add(vVar);
+              groupedVars.push({
+                id: pairId,
+                type: 'vector_pair',
+                nc_var: uVar,
+                nc_u_var: uVar,
+                nc_v_var: vVar,
+                display_name: pairName,
+                unit: pairUnit,
+                color_scheme: 'viridis',
+                is_surface_only: !!v.is_surface_only
+              });
+            }
+          } else {
+            groupedVars.push({
+              id: v.nc_var,
+              type: 'scalar_contour',
+              nc_var: v.nc_var,
+              nc_u_var: 'u',
+              nc_v_var: 'v',
+              display_name: v.display_name,
+              unit: v.unit,
+              color_scheme: v.suggested_color_scheme || 'thermal',
+              is_surface_only: !!v.is_surface_only
+            });
+          }
+        }
+
+        updated[groupIndex].variables = groupedVars;
+        if (isEdit) {
+          setEditVariableGroups(updated);
+        } else {
+          setVariableGroups(updated);
+        }
+        setSuccessMessage(`Discovered ${groupedVars.length} variable(s) in NetCDF header.`);
+      } else {
+        const err = await res.json();
+        setErrorMessage(err.detail || 'Failed to inspect NetCDF file header.');
+      }
+    } catch (e) {
+      if (e.message !== 'Unauthorized') setErrorMessage('Error connecting to backend for NetCDF inspection.');
+    } finally {
+      setInspectingIdx(null);
+    }
+  };
+
+  const handleUpdateVariableProp = (groupIndex, varIndex, prop, value, isEdit = false) => {
+    const targetGroups = isEdit ? editVariableGroups : variableGroups;
+    const updated = [...targetGroups];
+    const vars = [...updated[groupIndex].variables];
+    if (typeof vars[varIndex] === 'string') {
+      vars[varIndex] = { id: vars[varIndex], type: 'scalar_contour', nc_var: vars[varIndex], display_name: vars[varIndex], unit: '', color_scheme: 'thermal', is_surface_only: false };
+    }
+    vars[varIndex] = { ...vars[varIndex], [prop]: value };
+    updated[groupIndex].variables = vars;
+    if (isEdit) setEditVariableGroups(updated);
+    else setVariableGroups(updated);
+  };
+
+  const handleRemoveVariableFromGroup = (groupIndex, varIndex, isEdit = false) => {
+    const targetGroups = isEdit ? editVariableGroups : variableGroups;
+    const updated = [...targetGroups];
+    updated[groupIndex].variables = updated[groupIndex].variables.filter((_, i) => i !== varIndex);
+    if (isEdit) setEditVariableGroups(updated);
+    else setVariableGroups(updated);
+  };
+
+  const handleAddCustomVariable = (groupIndex, isEdit = false) => {
+    const targetGroups = isEdit ? editVariableGroups : variableGroups;
+    const updated = [...targetGroups];
+    const newVar = {
+      id: `var_${Date.now().toString().slice(-4)}`,
+      type: 'scalar_contour',
+      nc_var: '',
+      display_name: 'Custom Variable',
+      unit: '',
+      color_scheme: 'viridis',
+      is_surface_only: false
+    };
+    updated[groupIndex].variables = [...(updated[groupIndex].variables || []), newVar];
+    if (isEdit) setEditVariableGroups(updated);
+    else setVariableGroups(updated);
   };
 
   // Handle Member Submission
@@ -630,9 +752,9 @@ export default function Admin({ onBack }) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans antialiased">
+    <div className="h-screen max-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans antialiased overflow-hidden">
       {/* Top Navbar */}
-      <header className="border-b border-slate-900 bg-slate-950/80 backdrop-blur sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
+      <header className="shrink-0 border-b border-slate-900 bg-slate-950/80 backdrop-blur sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button 
             onClick={onBack}
@@ -673,9 +795,9 @@ export default function Admin({ onBack }) {
       </header>
 
       {/* Main Container */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Left Column: Products List */}
-        <aside className="w-80 border-r border-slate-900 bg-slate-950 flex flex-col shrink-0">
+        <aside className="w-80 border-r border-slate-900 bg-slate-950 flex flex-col shrink-0 min-h-0">
           <div className="p-4 border-b border-slate-900/60 flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Products (Regions)</span>
             {!showCreateProduct && (
@@ -754,16 +876,16 @@ export default function Admin({ onBack }) {
         </aside>
 
         {/* Right Column: Selected Product Members Area */}
-        <main className="flex-1 bg-slate-950 flex flex-col overflow-y-auto p-8 space-y-6">
+        <main className="flex-1 bg-slate-950 flex flex-col overflow-y-auto p-8 pb-16 space-y-6 min-h-0">
           {/* Banner Messages */}
-          {errorMessage && (
+          {!editingMember && !showCreateMember && errorMessage && (
             <div className="p-4 bg-red-950/40 border border-red-900/80 text-red-200 rounded-xl flex gap-3 items-start text-xs backdrop-blur">
               <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
               <div className="font-mono whitespace-pre-wrap">{errorMessage}</div>
             </div>
           )}
 
-          {successMessage && (
+          {!editingMember && !showCreateMember && successMessage && (
             <div className="p-4 bg-emerald-950/40 border border-emerald-900/80 text-emerald-200 rounded-xl flex gap-3 items-start text-xs backdrop-blur">
               <Check className="w-4 h-4 shrink-0 text-emerald-500" />
               <div>{successMessage}</div>
@@ -906,6 +1028,20 @@ export default function Admin({ onBack }) {
                       </p>
                     </div>
 
+                    {errorMessage && (
+                      <div className="p-3 bg-red-950/60 border border-red-900/80 text-red-200 rounded-xl flex gap-2.5 items-start text-xs shrink-0">
+                        <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
+                        <div className="font-mono whitespace-pre-wrap">{errorMessage}</div>
+                      </div>
+                    )}
+
+                    {successMessage && (
+                      <div className="p-3 bg-emerald-950/60 border border-emerald-900/80 text-emerald-200 rounded-xl flex gap-2.5 items-start text-xs shrink-0">
+                        <Check className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+                        <div>{successMessage}</div>
+                      </div>
+                    )}
+
                     <div className="flex-1 overflow-y-auto space-y-4 pr-1">
                       {/* Name input */}
                       <div className="space-y-1.5">
@@ -967,28 +1103,136 @@ export default function Admin({ onBack }) {
                                     type="text"
                                     value={group.file_path}
                                     onChange={(e) => handlePathChange(gIdx, e.target.value)}
-                                    placeholder="e.g. /home/dylan/srv/ocean_model_visualiser/croco_avg_t2.nc"
+                                    placeholder="e.g. /data/west.nc"
                                     className="w-full text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg px-3 py-2 text-slate-200 outline-none font-mono"
                                     required
                                   />
                                 </div>
                               </div>
 
-                              {/* Checkbox Variables selection */}
-                              <div className="space-y-1.5">
-                                <span className="text-[10px] text-slate-500 uppercase font-semibold">Supported Variables</span>
-                                <div className="flex flex-wrap gap-3 mt-1">
-                                  {['temp', 'salt', 'currents', 'zeta'].map((v) => (
-                                    <label key={v} className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-300">
-                                      <input 
-                                        type="checkbox"
-                                        checked={group.variables.includes(v)}
-                                        onChange={() => handleVariableChange(gIdx, v)}
-                                        className="rounded border-slate-800 bg-slate-900 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-950 w-3.5 h-3.5"
-                                      />
-                                      {v === 'temp' ? 'Temperature' : v === 'salt' ? 'Salinity' : v === 'currents' ? 'Currents' : 'Sea Surface Height (zeta)'}
-                                    </label>
-                                  ))}
+                              {/* Fetch Variable Data Button (Full width spanning both inputs) */}
+                              <button
+                                type="button"
+                                onClick={() => handleInspectNetcdf(gIdx, false)}
+                                disabled={inspectingIdx === gIdx}
+                                className="w-full flex items-center justify-center gap-2 py-2 px-3 text-xs font-semibold bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-800/60 hover:border-emerald-700 text-emerald-400 hover:text-emerald-300 rounded-lg transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {inspectingIdx === gIdx ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    <span>Scanning NetCDF Variables...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles className="w-3.5 h-3.5" />
+                                    <span>Fetch Variable Data</span>
+                                  </>
+                                )}
+                              </button>
+
+                              {/* Dynamic Variables Mapping UI */}
+                              <div className="space-y-2 pt-1 border-t border-slate-900">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Layer & Variable Mappings</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAddCustomVariable(gIdx, false)}
+                                    className="text-[10px] font-bold text-sky-400 hover:text-sky-300"
+                                  >
+                                    + Add Custom Mapping
+                                  </button>
+                                </div>
+
+                                <div className="space-y-2">
+                                  {group.variables.map((v, vIdx) => {
+                                    const vObj = typeof v === 'string' ? { id: v, type: v === 'currents' ? 'vector_pair' : 'scalar_contour', nc_var: v, nc_u_var: 'u', nc_v_var: 'v', display_name: v, unit: '', color_scheme: 'thermal', is_surface_only: v === 'zeta' } : v;
+                                    return (
+                                      <div key={vIdx} className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg space-y-2 text-xs">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <div className="flex items-center gap-2 flex-1">
+                                            <span className="font-semibold text-sky-400 text-[11px] font-mono">{vObj.nc_var || vObj.id}</span>
+                                            <select
+                                              value={vObj.type || 'scalar_contour'}
+                                              onChange={(e) => handleUpdateVariableProp(gIdx, vIdx, 'type', e.target.value, false)}
+                                              className="bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] text-slate-300 outline-none"
+                                            >
+                                              <option value="scalar_contour">Scalar Contour</option>
+                                              <option value="vector_pair">Vector Pair (Currents/Wind)</option>
+                                            </select>
+                                          </div>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleRemoveVariableFromGroup(gIdx, vIdx, false)}
+                                            className="text-slate-500 hover:text-red-400 p-0.5"
+                                          >
+                                            <Trash2 className="w-3 h-3" />
+                                          </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                          <div>
+                                            <label className="text-[9px] text-slate-500 block">Display Name</label>
+                                            <input 
+                                              type="text"
+                                              value={vObj.display_name || ''}
+                                              onChange={(e) => handleUpdateVariableProp(gIdx, vIdx, 'display_name', e.target.value, false)}
+                                              placeholder="e.g. Temperature"
+                                              className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] text-slate-200 outline-none"
+                                            />
+                                          </div>
+                                          <div>
+                                            <label className="text-[9px] text-slate-500 block">Unit</label>
+                                            <input 
+                                              type="text"
+                                              value={vObj.unit || ''}
+                                              onChange={(e) => handleUpdateVariableProp(gIdx, vIdx, 'unit', e.target.value, false)}
+                                              placeholder="e.g. °C, m/s"
+                                              className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] text-slate-200 outline-none"
+                                            />
+                                          </div>
+                                          {vObj.type === 'vector_pair' ? (
+                                            <>
+                                              <div>
+                                                <label className="text-[9px] text-slate-500 block">U Component Var</label>
+                                                <input 
+                                                  type="text"
+                                                  value={vObj.nc_u_var || 'u'}
+                                                  onChange={(e) => handleUpdateVariableProp(gIdx, vIdx, 'nc_u_var', e.target.value, false)}
+                                                  className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] text-slate-200 outline-none font-mono"
+                                                />
+                                              </div>
+                                              <div>
+                                                <label className="text-[9px] text-slate-500 block">V Component Var</label>
+                                                <input 
+                                                  type="text"
+                                                  value={vObj.nc_v_var || 'v'}
+                                                  onChange={(e) => handleUpdateVariableProp(gIdx, vIdx, 'nc_v_var', e.target.value, false)}
+                                                  className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] text-slate-200 outline-none font-mono"
+                                                />
+                                              </div>
+                                            </>
+                                          ) : (
+                                            <div className="col-span-2">
+                                              <ColorSchemeSelector
+                                                value={vObj.color_scheme || 'thermal'}
+                                                onChange={(newScheme) => handleUpdateVariableProp(gIdx, vIdx, 'color_scheme', newScheme, false)}
+                                              />
+                                            </div>
+                                          )}
+                                        </div>
+
+                                        <label className="flex items-center gap-1.5 cursor-pointer text-[10px] text-slate-400 pt-0.5">
+                                          <input 
+                                            type="checkbox"
+                                            checked={!!vObj.is_surface_only}
+                                            onChange={(e) => handleUpdateVariableProp(gIdx, vIdx, 'is_surface_only', e.target.checked, false)}
+                                            className="rounded border-slate-800 bg-slate-950 text-sky-500 w-3 h-3"
+                                          />
+                                          Surface Only (No depth dimension)
+                                        </label>
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               </div>
 
@@ -1065,6 +1309,20 @@ export default function Admin({ onBack }) {
                       </p>
                     </div>
 
+                    {errorMessage && (
+                      <div className="p-3 bg-red-950/60 border border-red-900/80 text-red-200 rounded-xl flex gap-2.5 items-start text-xs shrink-0">
+                        <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
+                        <div className="font-mono whitespace-pre-wrap">{errorMessage}</div>
+                      </div>
+                    )}
+
+                    {successMessage && (
+                      <div className="p-3 bg-emerald-950/60 border border-emerald-900/80 text-emerald-200 rounded-xl flex gap-2.5 items-start text-xs shrink-0">
+                        <Check className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+                        <div>{successMessage}</div>
+                      </div>
+                    )}
+
                     <div className="flex-1 overflow-y-auto space-y-4 pr-1">
                       {/* Name input */}
                       <div className="space-y-1.5">
@@ -1126,28 +1384,136 @@ export default function Admin({ onBack }) {
                                     type="text"
                                     value={group.file_path}
                                     onChange={(e) => handleEditPathChange(gIdx, e.target.value)}
-                                    placeholder="e.g. /home/dylan/srv/ocean_model_visualiser/croco_avg_t2.nc"
+                                    placeholder="e.g. /data/west.nc"
                                     className="w-full text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg px-3 py-2 text-slate-200 outline-none font-mono"
                                     required
                                   />
                                 </div>
                               </div>
 
-                              {/* Checkbox Variables selection */}
-                              <div className="space-y-1.5">
-                                <span className="text-[10px] text-slate-500 uppercase font-semibold">Supported Variables</span>
-                                <div className="flex flex-wrap gap-3 mt-1">
-                                  {['temp', 'salt', 'currents', 'zeta'].map((v) => (
-                                    <label key={v} className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-300">
-                                      <input 
-                                        type="checkbox"
-                                        checked={group.variables.includes(v)}
-                                        onChange={() => handleEditVariableChange(gIdx, v)}
-                                        className="rounded border-slate-800 bg-slate-900 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-950 w-3.5 h-3.5"
-                                      />
-                                      {v === 'temp' ? 'Temperature' : v === 'salt' ? 'Salinity' : v === 'currents' ? 'Currents' : 'Sea Surface Height (zeta)'}
-                                    </label>
-                                  ))}
+                              {/* Fetch Variable Data Button (Full width spanning both inputs) */}
+                              <button
+                                type="button"
+                                onClick={() => handleInspectNetcdf(gIdx, true)}
+                                disabled={inspectingIdx === gIdx}
+                                className="w-full flex items-center justify-center gap-2 py-2 px-3 text-xs font-semibold bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-800/60 hover:border-emerald-700 text-emerald-400 hover:text-emerald-300 rounded-lg transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {inspectingIdx === gIdx ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    <span>Scanning NetCDF Variables...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles className="w-3.5 h-3.5" />
+                                    <span>Fetch Variable Data</span>
+                                  </>
+                                )}
+                              </button>
+
+                              {/* Dynamic Variables Mapping UI */}
+                              <div className="space-y-2 pt-1 border-t border-slate-900">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Layer & Variable Mappings</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAddCustomVariable(gIdx, true)}
+                                    className="text-[10px] font-bold text-sky-400 hover:text-sky-300"
+                                  >
+                                    + Add Custom Mapping
+                                  </button>
+                                </div>
+
+                                <div className="space-y-2">
+                                  {group.variables.map((v, vIdx) => {
+                                    const vObj = typeof v === 'string' ? { id: v, type: v === 'currents' ? 'vector_pair' : 'scalar_contour', nc_var: v, nc_u_var: 'u', nc_v_var: 'v', display_name: v, unit: '', color_scheme: 'thermal', is_surface_only: v === 'zeta' } : v;
+                                    return (
+                                      <div key={vIdx} className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg space-y-2 text-xs">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <div className="flex items-center gap-2 flex-1">
+                                            <span className="font-semibold text-sky-400 text-[11px] font-mono">{vObj.nc_var || vObj.id}</span>
+                                            <select
+                                              value={vObj.type || 'scalar_contour'}
+                                              onChange={(e) => handleUpdateVariableProp(gIdx, vIdx, 'type', e.target.value, true)}
+                                              className="bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] text-slate-300 outline-none"
+                                            >
+                                              <option value="scalar_contour">Scalar Contour</option>
+                                              <option value="vector_pair">Vector Pair (Currents/Wind)</option>
+                                            </select>
+                                          </div>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleRemoveVariableFromGroup(gIdx, vIdx, true)}
+                                            className="text-slate-500 hover:text-red-400 p-0.5"
+                                          >
+                                            <Trash2 className="w-3 h-3" />
+                                          </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                          <div>
+                                            <label className="text-[9px] text-slate-500 block">Display Name</label>
+                                            <input 
+                                              type="text"
+                                              value={vObj.display_name || ''}
+                                              onChange={(e) => handleUpdateVariableProp(gIdx, vIdx, 'display_name', e.target.value, true)}
+                                              placeholder="e.g. Temperature"
+                                              className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] text-slate-200 outline-none"
+                                            />
+                                          </div>
+                                          <div>
+                                            <label className="text-[9px] text-slate-500 block">Unit</label>
+                                            <input 
+                                              type="text"
+                                              value={vObj.unit || ''}
+                                              onChange={(e) => handleUpdateVariableProp(gIdx, vIdx, 'unit', e.target.value, true)}
+                                              placeholder="e.g. °C, m/s"
+                                              className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] text-slate-200 outline-none"
+                                            />
+                                          </div>
+                                          {vObj.type === 'vector_pair' ? (
+                                            <>
+                                              <div>
+                                                <label className="text-[9px] text-slate-500 block">U Component Var</label>
+                                                <input 
+                                                  type="text"
+                                                  value={vObj.nc_u_var || 'u'}
+                                                  onChange={(e) => handleUpdateVariableProp(gIdx, vIdx, 'nc_u_var', e.target.value, true)}
+                                                  className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] text-slate-200 outline-none font-mono"
+                                                />
+                                              </div>
+                                              <div>
+                                                <label className="text-[9px] text-slate-500 block">V Component Var</label>
+                                                <input 
+                                                  type="text"
+                                                  value={vObj.nc_v_var || 'v'}
+                                                  onChange={(e) => handleUpdateVariableProp(gIdx, vIdx, 'nc_v_var', e.target.value, true)}
+                                                  className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] text-slate-200 outline-none font-mono"
+                                                />
+                                              </div>
+                                            </>
+                                          ) : (
+                                            <div className="col-span-2">
+                                              <ColorSchemeSelector
+                                                value={vObj.color_scheme || 'thermal'}
+                                                onChange={(newScheme) => handleUpdateVariableProp(gIdx, vIdx, 'color_scheme', newScheme, true)}
+                                              />
+                                            </div>
+                                          )}
+                                        </div>
+
+                                        <label className="flex items-center gap-1.5 cursor-pointer text-[10px] text-slate-400 pt-0.5">
+                                          <input 
+                                            type="checkbox"
+                                            checked={!!vObj.is_surface_only}
+                                            onChange={(e) => handleUpdateVariableProp(gIdx, vIdx, 'is_surface_only', e.target.checked, true)}
+                                            className="rounded border-slate-800 bg-slate-950 text-sky-500 w-3 h-3"
+                                          />
+                                          Surface Only (No depth dimension)
+                                        </label>
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               </div>
 
@@ -1262,11 +1628,18 @@ export default function Admin({ onBack }) {
                                 <span className="text-slate-100 font-medium">{g.file_path}</span>
                               </div>
                               <div className="flex flex-wrap gap-1.5 pl-5">
-                                {g.variables.map(v => (
-                                  <span key={v} className="px-2 py-0.5 bg-slate-900 text-[10px] rounded text-slate-400 border border-slate-800">
-                                    {v === 'temp' ? 'Temperature' : v === 'salt' ? 'Salinity' : v === 'currents' ? 'Currents' : 'Sea Surface Height (zeta)'}
-                                  </span>
-                                ))}
+                                {g.variables.map((v, vIdx) => {
+                                  const name = typeof v === 'string' ? (v === 'temp' ? 'Temperature' : v === 'salt' ? 'Salinity' : v === 'currents' ? 'Currents' : 'Sea Surface Height (zeta)') : (v.display_name || v.id || v.nc_var);
+                                  const unit = typeof v === 'object' && v.unit ? ` (${v.unit})` : '';
+                                  return (
+                                    <span key={vIdx} className="px-2 py-0.5 bg-slate-900 text-[10px] rounded text-slate-300 border border-slate-800 flex items-center gap-1">
+                                      <span className="font-medium">{name}{unit}</span>
+                                      {typeof v === 'object' && v.type && (
+                                        <span className="text-[9px] text-sky-400/80 font-mono">[{v.type === 'vector_pair' ? 'vector' : 'contour'}]</span>
+                                      )}
+                                    </span>
+                                  );
+                                })}
                               </div>
                               
                               {/* Depths & Time steps for this variable group */}

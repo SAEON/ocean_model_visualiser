@@ -18,11 +18,105 @@ from backend.database import members_collection
 
 NETCDF_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "croco_avg_t2.nc")
 
+from collections import OrderedDict
+import threading
+
+class BoundedLRUCache:
+    def __init__(self, maxsize=600, on_evict=None):
+        self.maxsize = maxsize
+        self.on_evict = on_evict
+        self.cache = OrderedDict()
+        self.lock = threading.Lock()
+
+    def __getitem__(self, key):
+        with self.lock:
+            val = self.cache[key]
+            self.cache.move_to_end(key)
+            return val
+
+    def __setitem__(self, key, value):
+        with self.lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+            self.cache[key] = value
+            if len(self.cache) > self.maxsize:
+                oldest_key, oldest_val = self.cache.popitem(last=False)
+                if self.on_evict:
+                    try:
+                        self.on_evict(oldest_key, oldest_val)
+                    except Exception as e:
+                        print(f"Error in LRU eviction callback: {e}")
+
+    def __contains__(self, key):
+        with self.lock:
+            return key in self.cache
+
+    def __delitem__(self, key):
+        with self.lock:
+            del self.cache[key]
+
+    def get(self, key, default=None):
+        with self.lock:
+            if key not in self.cache:
+                return default
+            self.cache.move_to_end(key)
+            return self.cache[key]
+
+    def pop(self, key, default=None):
+        with self.lock:
+            if key in self.cache:
+                val = self.cache.pop(key)
+                if self.on_evict:
+                    try:
+                        self.on_evict(key, val)
+                    except Exception:
+                        pass
+                return val
+            return default
+
+    def clear(self):
+        with self.lock:
+            if self.on_evict:
+                for k, v in list(self.cache.items()):
+                    try:
+                        self.on_evict(k, v)
+                    except Exception:
+                        pass
+            self.cache.clear()
+
+    def __len__(self):
+        with self.lock:
+            return len(self.cache)
+
+    def __iter__(self):
+        with self.lock:
+            return iter(list(self.cache.keys()))
+
+    def keys(self):
+        with self.lock:
+            return list(self.cache.keys())
+
+    def values(self):
+        with self.lock:
+            return list(self.cache.values())
+
+    def items(self):
+        with self.lock:
+            return list(self.cache.items())
+
+def _evict_dataset(key, val):
+    if isinstance(val, tuple) and len(val) >= 1:
+        ds_handle = val[0]
+        try:
+            ds_handle.close()
+        except Exception:
+            pass
+
 ds = None
 metadata_cache = {}
-dataset_cache = {}
-contour_layer_cache = {}
-currents_layer_cache = {}
+dataset_cache = BoundedLRUCache(maxsize=12, on_evict=_evict_dataset)
+contour_layer_cache = BoundedLRUCache(maxsize=800)
+currents_layer_cache = BoundedLRUCache(maxsize=800)
 
 contour_process_executor = ProcessPoolExecutor(max_workers=max(1, (os.cpu_count() or 4) // 2))
 
@@ -52,6 +146,51 @@ def get_file_cache_prefix(file_path: str) -> str:
     path_hash = hashlib.md5(canonical.encode('utf-8')).hexdigest()[:8]
     base_name = os.path.basename(canonical)
     return f"{base_name}_{path_hash}"
+
+def resolve_coordinates(ds: xr.Dataset):
+    """Find longitude and latitude coordinate variable names."""
+    lon_var = None
+    lat_var = None
+    for cand in ['lon_rho', 'nav_lon', 'lon', 'longitude']:
+        if cand in ds or cand in ds.coords:
+            lon_var = cand
+            break
+    for cand in ['lat_rho', 'nav_lat', 'lat', 'latitude']:
+        if cand in ds or cand in ds.coords:
+            lat_var = cand
+            break
+    return lon_var, lat_var
+
+def resolve_depth_dimension(ds: xr.Dataset):
+    """Find vertical depth dimension/coordinate name."""
+    for cand in ['depth', 's_rho', 'z_rho', 'z', 'level', 'lev']:
+        if cand in ds.dims or cand in ds.coords:
+            return cand
+    return None
+
+def resolve_time_dimension(ds: xr.Dataset):
+    """Find time dimension/coordinate name."""
+    for cand in ['time', 'ocean_time', 'time_counter']:
+        if cand in ds.dims or cand in ds.coords:
+            return cand
+    return None
+
+def resolve_mask(ds: xr.Dataset):
+    """Find land/water mask variable name."""
+    for cand in ['mask_rho', 'mask', 'land_mask']:
+        if cand in ds:
+            return cand
+    return None
+
+def get_variable_definition(meta: Optional[dict], variable_name: str) -> Optional[dict]:
+    """Look up variable definition in metadata by id or nc_var."""
+    if not meta:
+        return None
+    for v_def in meta.get("variables", []):
+        if isinstance(v_def, dict):
+            if v_def.get("id") == variable_name or v_def.get("nc_var") == variable_name:
+                return v_def
+    return None
 
 async def get_cached_dataset(file_path: str):
     now = time.time()
@@ -108,44 +247,124 @@ async def get_cached_dataset(file_path: str):
         except Exception as e:
             print(f"Error querying database for file_path {file_path}: {e}")
 
-        raw_times = [str(t) for t in dataset['time'].values]
+        time_dim = resolve_time_dimension(dataset)
+        raw_times = [str(t) for t in dataset[time_dim].values] if time_dim and time_dim in dataset else []
         times = raw_times[::time_sampling]
-        depths = [float(d) for d in dataset['depth'].values] if 'depth' in dataset else []
-        
-        lon_min = float(dataset['lon_rho'].min().values)
-        lon_max = float(dataset['lon_rho'].max().values)
-        lat_min = float(dataset['lat_rho'].min().values)
-        lat_max = float(dataset['lat_rho'].max().values)
 
-        allowed_netcdf_vars = []
-        if allowed_vars is not None:
-            if 'temp' in allowed_vars:
-                allowed_netcdf_vars.append('temp')
-            if 'salt' in allowed_vars:
-                allowed_netcdf_vars.append('salt')
-            if 'zeta' in allowed_vars:
-                allowed_netcdf_vars.append('zeta')
-            if 'currents' in allowed_vars:
-                allowed_netcdf_vars.extend(['u', 'v'])
+        depth_dim = resolve_depth_dimension(dataset)
+        depths = [float(d) for d in dataset[depth_dim].values] if depth_dim and depth_dim in dataset else []
+
+        lon_var, lat_var = resolve_coordinates(dataset)
+        if not lon_var or not lat_var:
+            raise HTTPException(status_code=400, detail="Coordinates (lon/lat) not found in NetCDF file")
+
+        lon_min = float(np.nanmin(dataset[lon_var].values))
+        lon_max = float(np.nanmax(dataset[lon_var].values))
+        lat_min = float(np.nanmin(dataset[lat_var].values))
+        lat_max = float(np.nanmax(dataset[lat_var].values))
+
+        parsed_variables = []
+        if allowed_vars:
+            for v in allowed_vars:
+                if isinstance(v, str):
+                    if v == 'temp':
+                        parsed_variables.append({
+                            "id": "temp", "type": "scalar_contour", "nc_var": "temp",
+                            "display_name": "Temperature", "unit": "°C", "color_scheme": "thermal",
+                            "is_surface_only": False
+                        })
+                    elif v == 'salt':
+                        parsed_variables.append({
+                            "id": "salt", "type": "scalar_contour", "nc_var": "salt",
+                            "display_name": "Salinity", "unit": "psu", "color_scheme": "haline",
+                            "is_surface_only": False
+                        })
+                    elif v == 'zeta':
+                        parsed_variables.append({
+                            "id": "zeta", "type": "scalar_contour", "nc_var": "zeta",
+                            "display_name": "Sea Surface Height", "unit": "m", "color_scheme": "spectral",
+                            "is_surface_only": True
+                        })
+                    elif v == 'currents':
+                        parsed_variables.append({
+                            "id": "currents", "type": "vector_pair", "nc_u_var": "u", "nc_v_var": "v",
+                            "display_name": "Currents", "unit": "m/s", "is_surface_only": False
+                        })
+                elif isinstance(v, dict):
+                    parsed_variables.append(v)
         else:
-            allowed_netcdf_vars = ['temp', 'salt', 'zeta', 'u', 'v']
+            for nc_var in dataset.data_vars:
+                var_dims = [str(d) for d in dataset[nc_var].dims]
+                has_depth = any(d in var_dims for d in ['depth', 's_rho', 'z_rho', 'z', 'level', 'lev'])
+                parsed_variables.append({
+                    "id": str(nc_var),
+                    "type": "vector_pair" if str(nc_var).lower() in ['u', 'v'] else "scalar_contour",
+                    "nc_var": str(nc_var),
+                    "nc_u_var": "u" if str(nc_var).lower() == 'u' else None,
+                    "nc_v_var": "v" if str(nc_var).lower() == 'v' else None,
+                    "display_name": str(nc_var).title(),
+                    "unit": str(dataset[nc_var].attrs.get('units', '')),
+                    "color_scheme": "thermal" if 'temp' in str(nc_var).lower() else "viridis",
+                    "is_surface_only": not has_depth
+                })
 
         var_ranges = {}
-        for var in allowed_netcdf_vars:
-            if var not in dataset:
-                continue
-            if var == 'zeta':
-                slice_data = dataset[var].isel(time=0).values
-                val_min, val_max = np.nanpercentile(slice_data, [1, 99])
-                var_ranges[var] = {"min": float(val_min), "max": float(val_max)}
-            else:
-                depth_ranges = []
-                for d_idx in range(len(depths)):
-                    slice_d = dataset[var].isel(time=0, depth=d_idx).values
-                    d_min, d_max = np.nanpercentile(slice_d, [1, 99])
-                    depth_ranges.append({"min": float(d_min), "max": float(d_max)})
-                var_ranges[var] = depth_ranges
-                
+        for var_def in parsed_variables:
+            v_type = var_def.get("type")
+            if v_type == "scalar_contour":
+                nc_var = var_def.get("nc_var")
+                if not nc_var or nc_var not in dataset:
+                    continue
+                var_dims = [str(d) for d in dataset[nc_var].dims]
+                has_depth = any(d in var_dims for d in ['depth', 's_rho', 'z_rho', 'z', 'level', 'lev'])
+                is_surface = not has_depth
+                isel_time = {time_dim: 0} if time_dim and time_dim in var_dims else {}
+                if is_surface:
+                    slice_data = dataset[nc_var].isel(**isel_time).values
+                    val_min, val_max = np.nanpercentile(slice_data, [1, 99])
+                    range_entry = {"min": float(val_min), "max": float(val_max)}
+                    var_ranges[nc_var] = range_entry
+                    if var_def.get("id") and var_def.get("id") != nc_var:
+                        var_ranges[var_def["id"]] = range_entry
+                else:
+                    depth_ranges = []
+                    d_dim_name = depth_dim if depth_dim and depth_dim in var_dims else None
+                    for d_idx in range(len(depths)):
+                        isel_kwargs = dict(isel_time)
+                        if d_dim_name:
+                            isel_kwargs[d_dim_name] = d_idx
+                        slice_d = dataset[nc_var].isel(**isel_kwargs).values
+                        d_min, d_max = np.nanpercentile(slice_d, [1, 99])
+                        depth_ranges.append({"min": float(d_min), "max": float(d_max)})
+                    var_ranges[nc_var] = depth_ranges
+                    if var_def.get("id") and var_def.get("id") != nc_var:
+                        var_ranges[var_def["id"]] = depth_ranges
+
+            elif v_type == "vector_pair":
+                u_var = var_def.get("nc_u_var", "u")
+                v_var = var_def.get("nc_v_var", "v")
+                for uv_name in [u_var, v_var]:
+                    if uv_name and uv_name in dataset and uv_name not in var_ranges:
+                        var_dims = [str(d) for d in dataset[uv_name].dims]
+                        has_depth = any(d in var_dims for d in ['depth', 's_rho', 'z_rho', 'z', 'level', 'lev'])
+                        is_surface = not has_depth
+                        isel_time = {time_dim: 0} if time_dim and time_dim in var_dims else {}
+                        if is_surface:
+                            slice_data = dataset[uv_name].isel(**isel_time).values
+                            val_min, val_max = np.nanpercentile(slice_data, [1, 99])
+                            var_ranges[uv_name] = {"min": float(val_min), "max": float(val_max)}
+                        else:
+                            depth_ranges = []
+                            d_dim_name = depth_dim if depth_dim and depth_dim in var_dims else None
+                            for d_idx in range(len(depths)):
+                                isel_kwargs = dict(isel_time)
+                                if d_dim_name:
+                                    isel_kwargs[d_dim_name] = d_idx
+                                slice_d = dataset[uv_name].isel(**isel_kwargs).values
+                                d_min, d_max = np.nanpercentile(slice_d, [1, 99])
+                                depth_ranges.append({"min": float(d_min), "max": float(d_max)})
+                            var_ranges[uv_name] = depth_ranges
+
         meta = {
             "times": times,
             "depths": depths,
@@ -156,13 +375,82 @@ async def get_cached_dataset(file_path: str):
                 "lat_max": lat_max
             },
             "ranges": var_ranges,
+            "variables": parsed_variables,
             "time_sampling": time_sampling,
-            "canonical_path": canonical_path
+            "canonical_path": canonical_path,
+            "coordinates": {
+                "longitude": lon_var,
+                "latitude": lat_var,
+                "depth": depth_dim,
+                "time": time_dim
+            }
         }
         dataset_cache[file_path] = (dataset, meta, time.time())
         return dataset, meta
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to open or parse NetCDF at {file_path}. Error: {str(e)}")
+
+def inspect_netcdf_file(file_path: str) -> dict:
+    canonical_path = get_canonical_file_path(file_path)
+    if not os.path.exists(canonical_path):
+        raise HTTPException(status_code=400, detail=f"NetCDF file not found at path: {file_path}")
+
+    try:
+        ds = xr.open_dataset(canonical_path, decode_times=False)
+        discovered_vars = []
+
+        lon_var, lat_var = resolve_coordinates(ds)
+        depth_var = resolve_depth_dimension(ds)
+
+        for var_name, data_array in ds.data_vars.items():
+            dims = [str(d) for d in data_array.dims]
+            attrs = data_array.attrs
+            
+            has_depth = any(d in dims for d in ['depth', 's_rho', 'z_rho', 'z', 'level', 'lev'])
+            is_surface_only = not has_depth
+
+            long_name = attrs.get('long_name') or attrs.get('standard_name') or var_name
+            units = attrs.get('units') or ''
+
+            if str(var_name).lower() in ['u', 'v', 'water_u', 'water_v', 'u10', 'v10']:
+                suggested_type = 'vector_pair'
+            else:
+                suggested_type = 'scalar_contour'
+
+            v_lower = str(var_name).lower()
+            if 'temp' in v_lower or 'sst' in v_lower:
+                color_scheme = 'thermal'
+            elif 'salt' in v_lower or 'sal' in v_lower:
+                color_scheme = 'haline'
+            elif 'zeta' in v_lower or 'height' in v_lower or 'ssh' in v_lower:
+                color_scheme = 'spectral'
+            else:
+                color_scheme = 'viridis'
+
+            discovered_vars.append({
+                "nc_var": str(var_name),
+                "display_name": str(long_name).title(),
+                "unit": str(units),
+                "dims": dims,
+                "is_surface_only": is_surface_only,
+                "suggested_type": suggested_type,
+                "suggested_color_scheme": color_scheme
+            })
+
+        ds.close()
+
+        return {
+            "file_path": file_path,
+            "canonical_path": canonical_path,
+            "variables": discovered_vars,
+            "coordinates": {
+                "longitude": lon_var,
+                "latitude": lat_var,
+                "depth": depth_var
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to inspect NetCDF at {file_path}. Error: {str(e)}")
 
 def compute_contours_sync(file_path: Optional[str], variable: str, time_idx: int, depth: int, tolerance: float, time_sampling: int = 1):
     canonical_path = get_canonical_file_path(file_path)
@@ -189,15 +477,44 @@ def compute_contours_sync(file_path: Optional[str], variable: str, time_idx: int
     try:
         ds_file = xr.open_dataset(resolved_path)
         actual_time = time_idx * time_sampling
-        if variable == 'zeta':
-            slice_data = ds_file['zeta'].isel(time=actual_time)
-        else:
-            slice_data = ds_file[variable].isel(time=actual_time, depth=depth)
-            
+
+        time_dim = resolve_time_dimension(ds_file) or 'time'
+        depth_dim = resolve_depth_dimension(ds_file) or 'depth'
+        lon_var, lat_var = resolve_coordinates(ds_file)
+        if not lon_var or not lat_var:
+            ds_file.close()
+            return {"type": "FeatureCollection", "features": []}
+
+        target_var = variable
+        if target_var not in ds_file:
+            for dv in ds_file.data_vars:
+                if str(dv).lower() == variable.lower():
+                    target_var = str(dv)
+                    break
+
+        if target_var not in ds_file:
+            ds_file.close()
+            return {"type": "FeatureCollection", "features": []}
+
+        var_dims = [str(d) for d in ds_file[target_var].dims]
+        isel_kwargs = {}
+        if time_dim in var_dims:
+            max_t = ds_file.sizes.get(time_dim, 0)
+            if max_t > 0:
+                isel_kwargs[time_dim] = min(actual_time, max_t - 1)
+        if depth_dim in var_dims:
+            max_d = ds_file.sizes.get(depth_dim, 0)
+            if max_d > 0:
+                isel_kwargs[depth_dim] = max(0, min(depth, max_d - 1))
+
+        slice_data = ds_file[target_var].isel(**isel_kwargs)
         z = slice_data.values
-        lon = ds_file['lon_rho'].values
-        lat = ds_file['lat_rho'].values
+        lon = ds_file[lon_var].values
+        lat = ds_file[lat_var].values
         ds_file.close()
+
+        if len(lon.shape) == 1 and len(lat.shape) == 1:
+            lon, lat = np.meshgrid(lon, lat)
         
         if np.isnan(z).all():
             res = {"type": "FeatureCollection", "features": []}
@@ -336,12 +653,12 @@ async def get_contours_async(file_path: Optional[str], variable: str, time_idx: 
     contour_layer_cache[cache_key] = res
     return res
 
-def compute_currents_sync(file_path: Optional[str], time_idx: int, depth: int, downsample: int = 2, time_sampling: int = 1):
+def compute_currents_sync(file_path: Optional[str], time_idx: int, depth: int, downsample: int = 2, time_sampling: int = 1, u_var: str = 'u', v_var: str = 'v'):
     canonical_path = get_canonical_file_path(file_path)
     file_prefix = get_file_cache_prefix(canonical_path)
     cache_dir = os.path.join(os.getcwd(), ".cache", "currents")
     os.makedirs(cache_dir, exist_ok=True)
-    cache_filename = f"{file_prefix}_curr_d{depth}_t{time_idx}_ds{downsample}.json"
+    cache_filename = f"{file_prefix}_curr_{u_var}_{v_var}_d{depth}_t{time_idx}_ds{downsample}.json"
     disk_cache_path = os.path.join(cache_dir, cache_filename)
 
     resolved_path = canonical_path if (canonical_path != 'default' and os.path.exists(canonical_path)) else NETCDF_PATH
@@ -361,16 +678,56 @@ def compute_currents_sync(file_path: Optional[str], time_idx: int, depth: int, d
     try:
         ds_file = xr.open_dataset(resolved_path)
         actual_time = time_idx * time_sampling
-        u_slice = ds_file['u'].isel(time=actual_time, depth=depth).values
-        v_slice = ds_file['v'].isel(time=actual_time, depth=depth).values
-        lon = ds_file['lon_rho'].values
-        lat = ds_file['lat_rho'].values
-        
+
+        time_dim = resolve_time_dimension(ds_file) or 'time'
+        depth_dim = resolve_depth_dimension(ds_file) or 'depth'
+        lon_var, lat_var = resolve_coordinates(ds_file)
+        if not lon_var or not lat_var:
+            ds_file.close()
+            return []
+
+        target_u = u_var if u_var in ds_file else 'u'
+        target_v = v_var if v_var in ds_file else 'v'
+
+        if target_u not in ds_file or target_v not in ds_file:
+            ds_file.close()
+            return []
+
+        u_dims = [str(d) for d in ds_file[target_u].dims]
+        v_dims = [str(d) for d in ds_file[target_v].dims]
+
+        isel_u = {}
+        isel_v = {}
+        if time_dim in u_dims:
+            max_t = ds_file.sizes.get(time_dim, 0)
+            if max_t > 0:
+                isel_u[time_dim] = min(actual_time, max_t - 1)
+        if time_dim in v_dims:
+            max_t = ds_file.sizes.get(time_dim, 0)
+            if max_t > 0:
+                isel_v[time_dim] = min(actual_time, max_t - 1)
+
+        if depth_dim in u_dims:
+            max_d = ds_file.sizes.get(depth_dim, 0)
+            if max_d > 0:
+                isel_u[depth_dim] = max(0, min(depth, max_d - 1))
+        if depth_dim in v_dims:
+            max_d = ds_file.sizes.get(depth_dim, 0)
+            if max_d > 0:
+                isel_v[depth_dim] = max(0, min(depth, max_d - 1))
+
+        u_slice = ds_file[target_u].isel(**isel_u).values
+        v_slice = ds_file[target_v].isel(**isel_v).values
+        lon = ds_file[lon_var].values
+        lat = ds_file[lat_var].values
+
+        if len(lon.shape) == 1 and len(lat.shape) == 1:
+            lon, lat = np.meshgrid(lon, lat)
+
         mask = None
-        for mask_name in ['mask_rho', 'mask']:
-            if mask_name in ds_file:
-                mask = ds_file[mask_name].values
-                break
+        mask_name = resolve_mask(ds_file)
+        if mask_name and mask_name in ds_file:
+            mask = ds_file[mask_name].values
         ds_file.close()
 
         lon_ds = lon[::downsample, ::downsample]
@@ -403,9 +760,9 @@ def compute_currents_sync(file_path: Optional[str], time_idx: int, depth: int, d
         print(f"Error computing currents sync: {e}")
         return []
 
-async def get_currents_async(file_path: Optional[str], time_idx: int, depth: int, downsample: int, meta: dict):
+async def get_currents_async(file_path: Optional[str], time_idx: int, depth: int, downsample: int, meta: dict, u_var: str = 'u', v_var: str = 'v'):
     canonical_path = get_canonical_file_path(file_path)
-    cache_key = (canonical_path, depth, time_idx, downsample)
+    cache_key = (canonical_path, u_var, v_var, depth, time_idx, downsample)
     if cache_key in currents_layer_cache:
         return currents_layer_cache[cache_key]
 
@@ -418,7 +775,9 @@ async def get_currents_async(file_path: Optional[str], time_idx: int, depth: int
         time_idx,
         depth,
         downsample,
-        time_sampling
+        time_sampling,
+        u_var,
+        v_var
     )
     currents_layer_cache[cache_key] = res
     return res

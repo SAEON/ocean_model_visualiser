@@ -12,6 +12,10 @@ from backend.services.dataset_service import (
     get_cached_dataset,
     get_contours_async,
     get_currents_async,
+    get_variable_definition,
+    resolve_coordinates,
+    resolve_depth_dimension,
+    resolve_mask,
     contour_layer_cache,
     currents_layer_cache,
     dataset_cache
@@ -45,6 +49,11 @@ async def warm_cache(file_path: Optional[str] = Query(None)):
     else:
         asyncio.create_task(asyncio.to_thread(warm_all_datasets))
         return {"status": "started", "message": "Cache warming started in background for all datasets"}
+
+@router.get("/warm_cache/status")
+async def get_cache_warmer_status():
+    from backend.cache_warmer import get_warming_status
+    return get_warming_status()
 
 @router.get("/metadata")
 async def get_metadata(file_path: Optional[str] = None):
@@ -80,20 +89,26 @@ async def get_contours(
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=86400"})
 
-    if file_path and variable not in meta.get('ranges', {}):
-        raise HTTPException(status_code=400, detail=f"Variable '{variable}' is not configured/available for this variable group.")
-        
-    if variable not in ['temp', 'salt', 'zeta']:
-        raise HTTPException(status_code=400, detail="Invalid variable. Choose temp, salt, or zeta.")
+    v_def = get_variable_definition(meta, variable)
+    target_var = v_def.get("nc_var") if v_def else variable
+    is_surface = bool(v_def.get("is_surface_only", False)) if v_def else False
+    if not is_surface and (variable == 'zeta' or target_var == 'zeta'):
+        is_surface = True
+
+    depth_to_use = 0 if is_surface else depth
+
+    ranges = meta.get('ranges', {})
+    if ranges and (target_var not in ranges and variable not in ranges):
+        raise HTTPException(status_code=400, detail=f"Variable '{variable}' is not configured/available for this dataset.")
         
     if time < 0 or time >= len(meta['times']):
         raise HTTPException(status_code=400, detail=f"Time index must be between 0 and {len(meta['times'])-1}")
-        
-    if variable != 'zeta':
-        if depth < 0 or depth >= len(meta['depths']):
-            raise HTTPException(status_code=400, detail=f"Depth index must be between 0 and {len(meta['depths'])-1}")
 
-    return await get_contours_async(file_path, variable, time, depth, tolerance, meta)
+    if not is_surface:
+        if depth < 0 or depth >= len(meta.get('depths', [])):
+            raise HTTPException(status_code=400, detail=f"Depth index must be between 0 and {len(meta.get('depths', []))-1}")
+
+    return await get_contours_async(file_path, target_var, time, depth_to_use, tolerance, meta)
 
 @router.get("/currents")
 async def get_currents(
@@ -160,22 +175,40 @@ async def get_frame(
     if time < 0 or time >= len(meta['times']):
         raise HTTPException(status_code=400, detail=f"Time index must be between 0 and {len(meta['times'])-1}")
         
-    if variable != 'zeta' and (depth < 0 or depth >= len(meta['depths'])):
-        raise HTTPException(status_code=400, detail=f"Depth index must be between 0 and {len(meta['depths'])-1}")
+    v_def = get_variable_definition(meta, variable)
+    target_var = v_def.get("nc_var") if v_def else variable
+    is_surface = bool(v_def.get("is_surface_only", False)) if v_def else False
+    if not is_surface and (variable == 'zeta' or target_var == 'zeta'):
+        is_surface = True
+
+    depth_to_use = 0 if is_surface else depth
+
+    if not is_surface and (depth < 0 or depth >= len(meta.get('depths', []))):
+        raise HTTPException(status_code=400, detail=f"Depth index must be between 0 and {len(meta.get('depths', []))-1}")
 
     result = {}
 
-    has_contours = variable in meta.get('ranges', {})
-    has_currents = 'u' in meta.get('ranges', {}) and 'v' in meta.get('ranges', {})
+    has_contours = target_var in meta.get('ranges', {}) or variable in meta.get('ranges', {})
+    
+    # Resolve dynamic vector pair variables if configured
+    vector_var_def = None
+    for vd in meta.get("variables", []):
+        if isinstance(vd, dict) and vd.get("type") == "vector_pair":
+            vector_var_def = vd
+            break
+
+    u_var = vector_var_def.get("nc_u_var", "u") if vector_var_def else "u"
+    v_var = vector_var_def.get("nc_v_var", "v") if vector_var_def else "v"
+    has_currents = (u_var in meta.get('ranges', {}) or 'u' in meta.get('ranges', {})) and (v_var in meta.get('ranges', {}) or 'v' in meta.get('ranges', {}))
 
     if include_contours and has_contours:
-        contours = await get_contours_async(file_path, variable, time, depth, tolerance, meta)
+        contours = await get_contours_async(file_path, target_var, time, depth_to_use, tolerance, meta)
         result["contours"] = contours
     else:
         result["contours"] = None
 
     if include_currents and has_currents:
-        currents = await get_currents_async(file_path, time, depth, 2, meta)
+        currents = await get_currents_async(file_path, time, depth_to_use, 2, meta, u_var=u_var, v_var=v_var)
         result["currents"] = currents
     else:
         result["currents"] = None
@@ -184,10 +217,11 @@ async def get_frame(
 
 @router.get("/stream_frames")
 async def stream_frames(
-    variable: str = Query("temp", description="Variable: temp, salt, zeta"),
-    time_start: int = Query(0, description="Start time index"),
+    variable: str = Query("temp", description="Variable name"),
+    time_start: Optional[int] = Query(None, description="Start time index"),
+    start_time: Optional[int] = Query(None, description="Start time index alias"),
     count: Optional[int] = Query(None, description="Number of frames to stream"),
-    depth: int = Query(0, description="Depth index (0-6)"),
+    depth: int = Query(0, description="Depth index"),
     tolerance: float = Query(0.001, description="Shapely simplification tolerance in degrees"),
     file_path: Optional[str] = Query(None, description="Path to specific NetCDF file"),
     include_contours: bool = Query(True),
@@ -202,28 +236,46 @@ async def stream_frames(
     if meta is None:
         raise HTTPException(status_code=503, detail="Dataset not loaded")
 
+    v_def = get_variable_definition(meta, variable)
+    target_var = v_def.get("nc_var") if v_def else variable
+    is_surface = bool(v_def.get("is_surface_only", False)) if v_def else False
+    if not is_surface and (variable == 'zeta' or target_var == 'zeta'):
+        is_surface = True
+
+    depth_to_use = 0 if is_surface else depth
+
     total_times = len(meta.get('times', []))
     if total_times == 0:
         raise HTTPException(status_code=400, detail="No time steps in dataset")
 
+    actual_start = start_time if start_time is not None else (time_start if time_start is not None else 0)
     num_frames = count if (count and count > 0) else total_times
-    time_indices = [(time_start + i) % total_times for i in range(num_frames)]
+    time_indices = [(actual_start + i) % total_times for i in range(num_frames)]
 
-    has_contours = variable in meta.get('ranges', {})
-    has_currents = 'u' in meta.get('ranges', {}) and 'v' in meta.get('ranges', {})
+    has_contours = target_var in meta.get('ranges', {}) or variable in meta.get('ranges', {})
+    
+    vector_var_def = None
+    for vd in meta.get("variables", []):
+        if isinstance(vd, dict) and vd.get("type") == "vector_pair":
+            vector_var_def = vd
+            break
+
+    u_var = vector_var_def.get("nc_u_var", "u") if vector_var_def else "u"
+    v_var = vector_var_def.get("nc_v_var", "v") if vector_var_def else "v"
+    has_currents = (u_var in meta.get('ranges', {}) or 'u' in meta.get('ranges', {})) and (v_var in meta.get('ranges', {}) or 'v' in meta.get('ranges', {}))
 
     async def generate_stream():
         for t_idx in time_indices:
             frame_data = {"time": t_idx}
 
             if include_contours and has_contours:
-                contours = await get_contours_async(file_path, variable, t_idx, depth, tolerance, meta)
+                contours = await get_contours_async(file_path, target_var, t_idx, depth_to_use, tolerance, meta)
                 frame_data["contours"] = contours
             else:
                 frame_data["contours"] = None
 
             if include_currents and has_currents:
-                currents = await get_currents_async(file_path, t_idx, depth, 2, meta)
+                currents = await get_currents_async(file_path, t_idx, depth_to_use, 2, meta, u_var=u_var, v_var=v_var)
                 frame_data["currents"] = currents
             else:
                 frame_data["currents"] = None
@@ -247,17 +299,7 @@ async def get_points(
     if dataset is None:
         raise HTTPException(status_code=503, detail="Dataset not loaded")
 
-    lon_var = None
-    lat_var = None
-    for name in ['lon_rho', 'nav_lon', 'lon']:
-        if name in dataset:
-            lon_var = name
-            break
-    for name in ['lat_rho', 'nav_lat', 'lat']:
-        if name in dataset:
-            lat_var = name
-            break
-            
+    lon_var, lat_var = resolve_coordinates(dataset)
     if not lon_var or not lat_var:
         raise HTTPException(status_code=400, detail="Could not find coordinate variables in NetCDF file.")
         
@@ -273,10 +315,9 @@ async def get_points(
     m, n = lon.shape
     
     mask = None
-    for mask_name in ['mask', 'mask_rho']:
-        if mask_name in dataset:
-            mask = dataset[mask_name].values
-            break
+    mask_name = resolve_mask(dataset)
+    if mask_name and mask_name in dataset:
+        mask = dataset[mask_name].values
 
     points = []
     for r in range(0, m, downsample):
@@ -301,7 +342,7 @@ async def get_points(
 
 @router.get("/timeseries")
 async def get_timeseries(
-    variable: str = Query(..., description="Variable: temp, salt, zeta"),
+    variable: str = Query(..., description="Variable name or id"),
     depth: int = Query(0, description="Depth index (0-6)"),
     i: int = Query(..., description="Grid row index (r)"),
     j: int = Query(..., description="Grid column index (c)"),
@@ -316,23 +357,23 @@ async def get_timeseries(
     if dataset is None:
         raise HTTPException(status_code=503, detail="Dataset not loaded")
 
-    if variable not in ['temp', 'salt', 'zeta']:
-        raise HTTPException(status_code=400, detail="Invalid variable. Choose temp, salt, or zeta.")
+    v_def = get_variable_definition(meta, variable)
+    target_var = v_def.get("nc_var") if v_def else variable
+    unit = v_def.get("unit", "") if v_def else ""
+    is_surface = bool(v_def.get("is_surface_only", False)) if v_def else False
+    if not is_surface and (variable == 'zeta' or target_var == 'zeta'):
+        is_surface = True
 
-    if variable not in dataset:
+    if target_var not in dataset:
+        for dv in dataset.data_vars:
+            if str(dv).lower() == target_var.lower():
+                target_var = str(dv)
+                break
+
+    if target_var not in dataset:
         raise HTTPException(status_code=400, detail=f"Variable '{variable}' not found in dataset.")
 
-    lon_var = None
-    lat_var = None
-    for name in ['lon_rho', 'nav_lon', 'lon']:
-        if name in dataset:
-            lon_var = name
-            break
-    for name in ['lat_rho', 'nav_lat', 'lat']:
-        if name in dataset:
-            lat_var = name
-            break
-            
+    lon_var, lat_var = resolve_coordinates(dataset)
     if not lon_var or not lat_var:
         raise HTTPException(status_code=400, detail="Could not find coordinate variables in NetCDF file.")
         
@@ -346,34 +387,40 @@ async def get_timeseries(
     if i < 0 or i >= m or j < 0 or j >= n:
         raise HTTPException(status_code=400, detail=f"Grid indices out of bounds. i must be 0-{m-1}, j must be 0-{n-1}")
 
-    dims = dataset[variable].dims
+    dims = [str(d) for d in dataset[target_var].dims]
     spatial_y_dim = dims[-2]
     spatial_x_dim = dims[-1]
     
     indexer = {spatial_y_dim: i, spatial_x_dim: j}
     
-    if 'depth' in dims and variable != 'zeta':
-        if depth < 0 or depth >= len(meta['depths']):
-            raise HTTPException(status_code=400, detail=f"Depth index must be between 0 and {len(meta['depths'])-1}")
-        indexer['depth'] = depth
+    depth_dim = resolve_depth_dimension(dataset)
+    if depth_dim and depth_dim in dims and not is_surface:
+        max_d = dataset.sizes.get(depth_dim, 0)
+        if depth < 0 or (max_d > 0 and depth >= max_d):
+            raise HTTPException(status_code=400, detail=f"Depth index must be between 0 and {max_d-1}")
+        indexer[depth_dim] = depth
         
     try:
-        ts_slice = dataset[variable].isel(**indexer)
+        ts_slice = dataset[target_var].isel(**indexer)
         raw_vals = ts_slice.values
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to query timeseries from dataset. Error: {str(e)}")
 
-    time_sampling = meta.get("time_sampling", 1)
+    time_sampling = meta.get("time_sampling", 1) if meta else 1
     vals = raw_vals[::time_sampling]
-    times = meta.get("times", [])
+    times = meta.get("times", []) if meta else []
     
     vals_clean = [float(v) if not np.isnan(v) else None for v in vals]
     
-    unit = '°C'
-    if variable == 'salt':
-        unit = 'g/kg'
-    elif variable == 'zeta':
-        unit = 'm'
+    if not unit:
+        unit = str(dataset[target_var].attrs.get('units', ''))
+        if not unit:
+            if variable == 'temp':
+                unit = '°C'
+            elif variable == 'salt':
+                unit = 'psu'
+            elif variable == 'zeta':
+                unit = 'm'
         
     return {
         "times": times,
