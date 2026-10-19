@@ -1,11 +1,10 @@
 import React from 'react';
-import { ExternalLink, Settings } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
 
 export default function Header({
   selectedMember,
   clickedProduct,
-  isLoading,
-  onNavigateAdmin
+  isLoading
 }) {
   return (
     <>
@@ -60,7 +59,7 @@ export default function Header({
           </p>
         </div>
 
-        {/* Right: Access Data link button & Admin portal */}
+        {/* Right: Access Data link button */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           <a
             href="https://catalog.somisana.ac.za/"
@@ -72,16 +71,6 @@ export default function Header({
             <span>Access Data</span>
             <ExternalLink className="w-3 h-3 sm:w-3.5 sm:h-3.5 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
           </a>
-          {onNavigateAdmin && (
-            <button
-              onClick={onNavigateAdmin}
-              className="px-2.5 py-1.5 sm:px-3.5 sm:py-2 bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700/80 text-[10px] sm:text-xs font-bold uppercase tracking-wider rounded-xl transition-all shadow-md flex items-center gap-1 sm:gap-1.5"
-              title="Admin Portal"
-            >
-              <Settings className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-sky-400" />
-              <span>Admin</span>
-            </button>
-          )}
         </div>
       </header>
 

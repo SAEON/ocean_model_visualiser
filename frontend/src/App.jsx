@@ -85,7 +85,7 @@ const getCentroid = (geometry) => {
   };
 };
 
-function Visualizer({ onNavigateAdmin }) {
+function Visualizer() {
   // Products & region selection states
   const [products, setProducts] = useState([]);
   const [clickedProduct, setClickedProduct] = useState(null);
@@ -839,12 +839,11 @@ function Visualizer({ onNavigateAdmin }) {
         />
       </DeckGL>
 
-      {/* 2. Top Header Title (Full-Width with logos, active model text, Access Data, Admin) */}
+      {/* 2. Top Header Title (Full-Width with logos, active model text, Access Data) */}
       <Header
         selectedMember={selectedMember}
         clickedProduct={clickedProduct}
         isLoading={isLoading}
-        onNavigateAdmin={onNavigateAdmin}
       />
 
       {/* 3. Left Sidebar & Top Control Panel Stack */}
@@ -973,15 +972,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <Visualizer
-        onNavigateAdmin={() =>
-          navigate(
-            window.location.pathname.includes('/ocean_model_visualiser/')
-              ? '/ocean_model_visualiser/admin'
-              : '/admin'
-          )
-        }
-      />
+      <Visualizer />
     </ErrorBoundary>
   );
 }
